@@ -7,6 +7,7 @@ import json
 import warnings
 
 import pandas
+import procfs.dvs
 
 def diff_single_dvs_stats_file( fp ):
     """
@@ -22,51 +23,33 @@ def diff_single_dvs_stats_file( fp ):
     - We assume pages are not interleaved
     """
 
-    key_counts = {}
-    this_page_num = 1
-    these_counters = {}
+    page_list = procfs.dvs.parse_concatenated_dvs_mount_stats(fp)
     counter_diffs = []
-    for line in fp:
-        ### digest the line
-        key, value_string = line.split(':', 1)
-        values = []
-        if key in key_counts: # not the first time seeing this counter
-            key_counts[key] += 1
-            if key_counts[key] > this_page_num: # new page detected
-                this_page_num += 1
-                counter_diffs.append( these_counters )
-                these_counters = {}
-        else: # first time seeing this counter
-           key_counts[key] = 1
 
-        ### cast counter values into ints or floats
-        for value in value_string.strip().split():
-            if '.' in value:
-                values.append( float( value ) )
-            else:
-                values.append( int( value ) )
+    all_counters = set([])
+    for page in page_list:
+        all_counters = all_counters | set(page.keys())
 
-        ### calculate diff if key has been previously encountered
-        if len(counter_diffs) > 0:
-            prev_counter_diffs = counter_diffs[-1]
-            if key in prev_counter_diffs:
-                value_diffs = []
-                changes = 0.0
-                for idx, value in enumerate(values):
-                    delta = value - prev_counter_diffs[key][idx]
-                    value_diffs.append( delta )
-                    changes += abs( delta )
-                if changes != 0: # only record changes in counter values
-                    these_counters[key] = value_diffs
-            else: # a new key has appeared in this page
-                these_counters[key] = values
-        else:
-            these_counters[key] = values
+    if len( page_list ) > 1:
+        for idx in range( 1, len(page_list) ):
+            a = page_list[idx-1]
+            b = page_list[idx]
+            page_diff = {}
+            for key in all_counters:
+                if key not in a and key in b:
+                    val_a = [ 0 for x in b[key] ]
+                elif key in a and key not in b:
+                    val_a = [ 0 for x in b[key] ]
+                val_a = a[key]
+                val_b = b[key]
+                page_diff[key] = [ val_b[i] - val_a[i] for i in range( len(val_a) ) ]
+            total_change = 0.0
+            for key in page_diff.keys():
+                total_change += sum( [ abs( x ) for x in page_diff[key] ] )
+            if total_change > 0.0:
+                counter_diffs.append( page_diff )
 
-    ### append last page being populated
-    counter_diffs.append( these_counters )
-
-    return counter_diffs[1:]
+    return counter_diffs
 
 if __name__ == '__main__':
     # build a super structure of counter diffs per node
@@ -123,6 +106,8 @@ if __name__ == '__main__':
     df = pandas.DataFrame( None, index=all_nodes_list )
     df.index.name = "node"
     for counter in all_counters_list:
-        df[counter] = [ all_counter_data[x][counter] for x in all_nodes_list ]
+        column = [ all_counter_data[x][counter] for x in all_nodes_list ]
+        if sum(column) != 0:
+            df[counter] = column
 
     df.to_csv( '/dev/stdout' )
