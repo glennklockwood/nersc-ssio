@@ -1,9 +1,13 @@
 #!/usr/bin/env python
 #
+#  Given a list of files named according to "mount-stats.nidXXXXX.out" which
+#  contain the output of /proc/fs/dvs/mounts/.../stats before and after some
+#  event for a node `nidXXXXX`, compare every counter and report a table of
+#  counters that changed on each node.
+#
 
 import re
 import sys
-import json
 import warnings
 
 import pandas
@@ -12,8 +16,7 @@ import procfs.dvs
 def diff_single_dvs_stats_file( fp ):
     """
     For a file that contains a series of concatenated /proc/fs/dvs/stats
-    outputs, walk the file and report deltas when a key is encountered more
-    than once.
+    outputs, identify counters that change between consecutive dumps
     - We call one dump of /proc/fs/dvs/mounts/.../stats a "page"
     - A page is comprised of key-value pairs, where the key is a counter, and
       the value is a series of counts
@@ -26,11 +29,13 @@ def diff_single_dvs_stats_file( fp ):
     page_list = procfs.dvs.parse_concatenated_dvs_mount_stats(fp)
     counter_diffs = []
 
+    ### obtain a list of all observed counters
     all_counters = set([])
     for page in page_list:
         all_counters = all_counters | set(page.keys())
 
     if len( page_list ) > 1:
+        # compare every page to the one before it and calculate changes
         for idx in range( 1, len(page_list) ):
             a = page_list[idx-1]
             b = page_list[idx]
@@ -48,6 +53,10 @@ def diff_single_dvs_stats_file( fp ):
                 total_change += sum( [ abs( x ) for x in page_diff[key] ] )
             if total_change > 0.0:
                 counter_diffs.append( page_diff )
+    elif len(page_list) == 1:
+        raise Exception( "Only one page of counters detected" )
+    else:
+        raise Exception( "No counters detected" )
 
     return counter_diffs
 
@@ -107,7 +116,8 @@ if __name__ == '__main__':
     df.index.name = "node"
     for counter in all_counters_list:
         column = [ all_counter_data[x][counter] for x in all_nodes_list ]
-        if sum(column) != 0:
+        ### drop all columns that contain nothing but zeroes
+        if sum([ abs(x) for x in column]) != 0:
             df[counter] = column
 
     df.to_csv( '/dev/stdout' )
