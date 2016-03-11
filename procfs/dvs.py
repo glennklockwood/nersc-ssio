@@ -15,7 +15,56 @@ _VALID_INSTANCE_KEYS = [
     'Queued Messages',
 ]
 
+def parse_concatenated_dvs_mount_stats( fp ):
+    """
+    For a file that contains a series of concatenated /proc/fs/dvs/stats
+    outputs, walk the file and report deltas when a key is encountered more
+    than once.
+    - We call one dump of /proc/fs/dvs/mounts/.../stats a "page"
+    - A page is comprised of key-value pairs, where the key is a counter, and
+      the value is a series of counts
+    - This script operates on a file that contains a series of pages
+    - When a key is detected a second (or third, etc) time, we assume it belongs
+      to a different page from the previous page on which it was detected
+    - We assume pages are not interleaved
+    """
+
+    key_counts = {}
+    this_page_num = 1
+    this_page = {}
+    counter_pages = []
+    for line in fp:
+        ### digest the line
+        key, value_string = line.split(':', 1)
+        values = []
+        if key in key_counts: # not the first time seeing this counter
+            key_counts[key] += 1
+            if key_counts[key] > this_page_num: # new page detected
+                this_page_num += 1
+                counter_pages.append( this_page )
+                this_page = {}
+        else: # first time seeing this counter
+           key_counts[key] = 1
+
+        ### cast counter values into ints or floats
+        for value in value_string.strip().split():
+            if '.' in value:
+                values.append( float( value ) )
+            else:
+                values.append( int( value ) )
+
+        ### Add this counter to the page currently being built
+        this_page[key] = values
+
+    ### append last page being populated
+    counter_pages.append( this_page )
+
+    return counter_pages
+
 def parse_dvs_mount_stats( fp ):
+    """
+    Convert a single page of DVS mount stats counters into a dict
+    """
     data = {}
 
     for line in fp:
