@@ -19,5 +19,7 @@ else
     echo "$(date) - Found Lustre fs stats file at $LUSTRE_PROC_STATS"
 fi
 
-cat /proc/fs/lustre/llite/snx11168-*/{stats,read_ahead_stats} >> $OUTPUT_DIR/lustre-stats.$(hostname).out
-cat /proc/fs/lustre/llite/snx11168-*/{statahead_stats,max_cached_mb} >> $OUTPUT_DIR/lustre-stats2.$(hostname).out
+for stats_file in stats read_ahead_stats statahead_stats max_cached_mb
+do
+    cat $(dirname $LUSTRE_PROC_STATS)/${stats_file} >> $OUTPUT_DIR/lustre-${stats_file}.$(hostname).out
+done
