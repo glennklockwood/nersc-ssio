@@ -12,12 +12,19 @@
 #   diff_concatenated_dvs_stats.py script.
 #
 
-OUTPUT_DIR=${SLURM_SUBMIT_DIR:-$PWD}
+OUTPUT_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
 
-# Try to find the DataWarp file system stats file
+DW_DIR="${DW_JOB_STRIPED:-$DW_JOB_PRIVATE}"
+
+if [ -z "$DW_DIR" ]; then
+    echo "$(date) - DW_JOB_{STRIPED,PRIVATE} are NULL" >&2
+    exit 1
+fi
+
+### Try to find the DataWarp file system stats file
 DVS_PROC_STATS=$(mount | grep $(sed -e 's#/$##g' <<< $DW_JOB_STRIPED) | grep -o 'nodefile=[^,]*,' | cut -d= -f2 | sed -e's/,$//' -e's/nodenames/stats/')
 if [ -z "$DVS_PROC_STATS" ]; then
-    echo "$(date) - Could not find DataWarp/DVS fs stats file on $(hostname)"
+    echo "$(date) - Could not find DataWarp/DVS fs stats file on $(hostname)" >&2
     exit 1
 else
     echo "$(date) - Found DataWarp/DVS fs stats file at $DVS_PROC_STATS"
