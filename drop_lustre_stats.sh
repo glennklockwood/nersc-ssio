@@ -15,8 +15,6 @@ LUSTRE_FS=${1-snx11168}
 LUSTRE_PROC_STATS="$(find /proc/fs/lustre/llite -name stats 2>/dev/null | grep "$LUSTRE_FS")"
 if [ -z "$LUSTRE_PROC_STATS" ]; then
     echo "$(date) - Could not find Lustre fs stats file for $LUSTRE_FS on $(hostname)"
-else
-    echo "$(date) - Found Lustre fs stats file at $LUSTRE_PROC_STATS"
 fi
 
 for stats_file in stats read_ahead_stats statahead_stats max_cached_mb

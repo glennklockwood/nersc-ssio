@@ -26,8 +26,6 @@ DVS_PROC_STATS=$(mount | grep $(sed -e 's#/$##g' <<< $DW_JOB_STRIPED) | grep -o 
 if [ -z "$DVS_PROC_STATS" ]; then
     echo "$(date) - Could not find DataWarp/DVS fs stats file on $(hostname)" >&2
     exit 1
-else
-    echo "$(date) - Found DataWarp/DVS fs stats file at $DVS_PROC_STATS"
 fi
 
 cat $DVS_PROC_STATS >> $OUTPUT_DIR/mount-stats.$(hostname).out
