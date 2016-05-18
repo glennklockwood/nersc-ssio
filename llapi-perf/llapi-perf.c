@@ -73,6 +73,7 @@ static int opt_fstat = 0;
 static int opt_lseek = 0;
 static int opt_realpath = 0;
 static int opt_ioctl = 0;
+static int opt_llapi = 0;
 static int opt_fpp = 0;
 static int rank = -1;
 
@@ -168,26 +169,33 @@ int main(int argc, char **argv)
       else
         free(new_path);
    }
-   else if ( opt_ioctl )
+   else if ( opt_llapi || opt_ioctl )
    {
       struct lov_user_md *lum;
+      size_t lumsize = sizeof(struct lov_user_md) +
+           LOV_MAX_STRIPE_COUNT * sizeof(struct lov_user_ost_data);
 
-      int v1 = sizeof(struct lov_user_md_v1) +
-           LOV_MAX_STRIPE_COUNT * sizeof(struct lov_user_ost_data_v1);
-      int v3 = sizeof(struct lov_user_md_v3) +
-           LOV_MAX_STRIPE_COUNT * sizeof(struct lov_user_ost_data_v1);
-
-      lum = malloc((v1 > v3 ? v1 : v3));
+      lum = calloc(1, lumsize);
       if (lum == NULL) {
          ret = ENOMEM;
          fprintf(stderr, "No memory\n");
       }
       else {
-         ret = llapi_file_get_stripe(opt_file, lum);
-/*       printf( "stripe_width=%d stripe_size=%d starting_ost=%d\n",
+        if ( opt_llapi ) 
+        {
+            ret = llapi_file_get_stripe(opt_file, lum);
+        }
+        else if ( opt_ioctl )
+        {
+            lum->lmm_magic = LOV_USER_MAGIC;
+            ret = ioctl( fd, LL_IOC_LOV_GETSTRIPE, (void *)lum );
+        }
+#ifdef DEBUG
+        printf( "stripe_width=%d stripe_size=%d starting_ost=%d\n",
              lum->lmm_stripe_count,
              lum->lmm_stripe_size,
-             lum->lmm_stripe_count ); */
+             lum->lmm_stripe_count );
+#endif
         }
    }
    else
@@ -214,12 +222,13 @@ int main(int argc, char **argv)
 
    if(rank == 0)
    {
-      printf("opt_file: %s, opt_create: %d, opt_fstat: %d, opt_lseek: %d, opt_realpath: %d, opt_ioctl: %d, opt_fpp: %d, nprocs: %d, time: %f ms\n",
+      printf("opt_file: %s, opt_create: %d, opt_fstat: %d, opt_lseek: %d, opt_realpath: %d, opt_llapi: %d, opt_ioctl: %d, opt_fpp: %d, nprocs: %d, time: %f ms\n",
         opt_file,
         opt_create,
         opt_fstat,
         opt_lseek,
         opt_realpath,
+        opt_llapi,
         opt_ioctl,
         opt_fpp,
         nprocs,
@@ -230,11 +239,26 @@ int main(int argc, char **argv)
    return(0);
 }
 
+
+static void usage(void)
+{
+    printf("Usage: stat-perf [<OPTIONS>...] <FILE NAME>\n");
+    printf("\n<OPTIONS> is one or more of\n");
+    printf(" -c       create new file to stat\n");
+    printf(" -p       do file-per-process instead of shared file\n");
+    printf(" -f       use fstat instead of stat\n");
+    printf(" -l       use lseek instead of stat\n");
+    printf(" -r       use realpath instead of stat\n");
+    printf(" -a       use Lustre API test\n");
+    printf(" -i       use ioctl Lustre test\n");
+    printf(" -h       print this help\n");
+}
+
 static int parse_args(int argc, char **argv)
 {
    int c;
    
-   while ((c = getopt(argc, argv, "fclrip")) != EOF) {
+   while ((c = getopt(argc, argv, "fclripa")) != EOF) {
       switch (c) {
          case 'c': /* create file */
             opt_create = 1;
@@ -248,8 +272,11 @@ static int parse_args(int argc, char **argv)
          case 'r': /* realpath instead of stat */
             opt_realpath = 1;
             break;
-         case 'i': /* ioctl */
+         case 'i': /* use ioctl test */
             opt_ioctl = 1;
+            break;
+         case 'a': /* use llapi test*/
+            opt_llapi = 1;
             break;
          case 'p': /* file per process instead of shared file */
             opt_fpp = 1;
@@ -267,9 +294,9 @@ static int parse_args(int argc, char **argv)
       }
    }
 
-   if(opt_lseek + opt_fstat + opt_realpath + opt_ioctl > 1)
+   if(opt_lseek + opt_fstat + opt_realpath + opt_ioctl + opt_llapi > 1)
    {
-      fprintf(stderr, "Error: Only specify one of -l, -f, -i, or -r.\n");
+      fprintf(stderr, "Error: Only specify one of -l, -f, -i, -a, or -r.\n");
       usage();
       exit(1);
    }
@@ -294,28 +321,4 @@ static int parse_args(int argc, char **argv)
 
    return(0);
 }
-
-static void usage(void)
-{
-    printf("Usage: stat-perf [<OPTIONS>...] <FILE NAME>\n");
-    printf("\n<OPTIONS> is one or more of\n");
-    printf(" -c       create new file to stat\n");
-    printf(" -p       do file-per-process instead of shared file\n");
-    printf(" -f       use fstat instead of stat\n");
-    printf(" -l       use lseek instead of stat\n");
-    printf(" -r       use realpath instead of stat\n");
-    printf(" -i       use ioctl Lustre test\n");
-    printf(" -h       print this help\n");
-}
-
-/*
- * Local variables:
- *  c-indent-level: 3
- *  c-basic-offset: 3
- *  tab-width: 3
- *
- * vim: ts=3
- * End:
- */ 
-
 
