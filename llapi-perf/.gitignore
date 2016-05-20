@@ -1,2 +1,5 @@
 llapi-perf
 trial.*
+a.out
+test-getstripe
+test-getobdcount

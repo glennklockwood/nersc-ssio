@@ -1,7 +1,9 @@
-.PHONY: clean
-OBJS=llapi-perf
+.PHONY: clean all
+OBJS=llapi-perf test-getstripe test-getobdcount
+
 LDFLAGS=-llustreapi -dynamic
-$(OBJS):
+
+all: $(OBJS)
 
 clean:
-	@-rm -v llapi-perf
+	@-rm -v $(OBJS)
