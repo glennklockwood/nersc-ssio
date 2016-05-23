@@ -19,13 +19,16 @@ int main( int argc, char **argv ) {
     lum = calloc(1, lumsize);
 
     /* 
-     * LL_IOC_LOV_GETSTRIPE takes only an open file handle as input
-     *   but doesn't return stripe placement information
+     * LL_IOC_LOV_GETSTRIPE takes only an open file handle as input.  It only
+     *   returns stripe placement information if the lmm_stripe_count field of
+     *   the inputted lov_user_md struct is set to a nonzero value that
+     *   indicates how many lov_user_ost_data structures have been malloc'ed
      */
     if ( argc == 2 ) {
         char *input_filepath = argv[1];
         printf( "This is with ioctl LL_IOC_LOV_GETSTRIPE:\n" );
         lum->lmm_magic = LOV_USER_MAGIC;
+        lum->lmm_stripe_count = LOV_MAX_STRIPE_COUNT;
         fd = open( input_filepath, O_RDWR );
         ret = ioctl( fd, LL_IOC_LOV_GETSTRIPE, (void *)lum );
         close(fd);
