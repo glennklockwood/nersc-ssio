@@ -83,16 +83,22 @@ void lustre_runtime_initialize()
     /* allocate the full size of the memory limit we are given */
     lustre_runtime->record_buffer= malloc(mem_limit);
     if(!lustre_runtime->record_buffer)
+    {
+        lustre_runtime->record_buffer_size = 0;
         return;
+    }
     lustre_runtime->record_buffer_size = mem_limit;
     lustre_runtime->next_free_record = lustre_runtime->record_buffer;
     memset(lustre_runtime->record_buffer, 0, lustre_runtime->record_buffer_size);
 
-    /* allocate array of Lustre runtime data.  we calculate the maximum possible
+    /* Allocate array of Lustre runtime data.  We calculate the maximum possible
      * number of records that will fit into mem_limit by assuming that each
-     * record has a zero-sized ost_ids array
+     * record has the minimum possible OST count, then allocate that many 
+     * runtime records.  record_buffer will always run out of memory before
+     * we overflow record_runtime_array.
      */
-    max_records = mem_limit / sizeof(struct lustre_record_runtime);
+    max_records = mem_limit / sizeof(struct darshan_lustre_record);
+    printf( "There can be a maximum of %ld records/runtime records\n", max_records );
     lustre_runtime->record_runtime_array =
         malloc( max_records * sizeof(struct lustre_record_runtime));
     if(!lustre_runtime->record_runtime_array)
@@ -110,13 +116,13 @@ void lustre_runtime_initialize()
 
 #define LUSTRE_RECORD_SIZE( osts ) ( sizeof(struct darshan_lustre_record) + sizeof(int64_t) * (osts - 1) )
 
-void darshan_instrument_lustre_file( const char* filepath, int fd )
+void darshan_instrument_lustre_file(const char* filepath, int fd)
 {
     struct lustre_record_runtime *rec_rt;
     struct darshan_lustre_record *rec;
     darshan_record_id rec_id;
     int limit_flag;
-    int ret;
+    int i;
     struct lov_user_md *lum;
     size_t lumsize = sizeof(struct lov_user_md) +
         LOV_MAX_STRIPE_COUNT * sizeof(struct lov_user_ost_data);
@@ -144,8 +150,14 @@ void darshan_instrument_lustre_file( const char* filepath, int fd )
     printf( "Base record size is %ld bytes\n", sizeof(struct darshan_lustre_record));
     printf( "Record size will be %ld bytes\n", rec_size );
 
+    {
+        /* broken out for clarity */
+        void *end_of_new_record = (char*)lustre_runtime->next_free_record + rec_size;
+        void *end_of_rec_buffer = (char*)lustre_runtime->record_buffer + lustre_runtime->record_buffer_size;
+        limit_flag = ( end_of_new_record > end_of_rec_buffer );
+    }
     /* check if adding this record would run us out of memory */
-    if ( (char*)lustre_runtime->next_free_record + rec_size > (char*)lustre_runtime->record_buffer + lustre_runtime->record_buffer_size )
+    if ( limit_flag )
     {
         printf( "This record would start at %ld and end at %ld, but our max addressable is %ld\n",
             (char*)lustre_runtime->next_free_record - (char*)lustre_runtime->record_buffer,
@@ -153,12 +165,12 @@ void darshan_instrument_lustre_file( const char* filepath, int fd )
             (char*)lustre_runtime->record_buffer + lustre_runtime->record_buffer_size - (char*)lustre_runtime->record_buffer);
 
         printf( "Out of memory!\n" );
-        if ( lum )
-            free(lum);
+        free(lum);
         return;
     }
     
-    /* check if record is in hash; for this test, we assume that it isn't */
+    /* search the hash table for this file record, and initialize if not found */
+    /* HASH_FIND( ... ) */
 
     /* add new file record to list */
     rec_rt = &(lustre_runtime->record_runtime_array[lustre_runtime->record_count]);
@@ -168,16 +180,12 @@ void darshan_instrument_lustre_file( const char* filepath, int fd )
     rec->rec_id = lustre_runtime->record_count; /* XXX */
     rec->rank = 0; /* XXX */
 
-    if ( lum )
-    {
-        int i;
-        rec->counters[LUSTRE_STRIPE_SIZE] = lum->lmm_stripe_size;
-        rec->counters[LUSTRE_STRIPE_WIDTH] = lum->lmm_stripe_count;
-        rec->counters[LUSTRE_STRIPE_OFFSET] = lum->lmm_stripe_offset;
-        for ( i = 0; i < lum->lmm_stripe_count; i++ )
-            rec->ost_ids[i] = lum->lmm_objects[i].l_ost_idx;
-        free(lum);
-    }
+    rec->counters[LUSTRE_STRIPE_SIZE] = lum->lmm_stripe_size;
+    rec->counters[LUSTRE_STRIPE_WIDTH] = lum->lmm_stripe_count;
+    rec->counters[LUSTRE_STRIPE_OFFSET] = lum->lmm_stripe_offset;
+    for ( i = 0; i < lum->lmm_stripe_count; i++ )
+        rec->ost_ids[i] = lum->lmm_objects[i].l_ost_idx;
+    free(lum);
 
     printf( "This record starts at %ld\n", (char*)rec - (char*)lustre_runtime->record_buffer );
     printf( "This record's last element starts at %ld according to what we just wrote\n", 
