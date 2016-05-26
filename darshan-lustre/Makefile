@@ -1,5 +1,5 @@
 .PHONY: clean all
-OBJS=llapi-perf test-getstripe test-getobdcount
+OBJS=llapi-perf test-getstripe test-getobdcount test-record-malloc
 
 LDFLAGS=-llustreapi -dynamic
 
