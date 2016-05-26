@@ -1,53 +1,17 @@
 /*
-              COPYRIGHT
-
-The following is a notice of limited availability of the code, and disclaimer
-which must be included in the prologue of the code and in all source listings
-of the code.
-
-Copyright Notice
- + 2015 University of Chicago
-
-Permission is hereby granted to use, reproduce, prepare derivative works, and
-to redistribute to others.  This software was authored by:
-
-Mathematics and Computer Science Division
-Argonne National Laboratory, Argonne IL 60439
-
-
-               GOVERNMENT LICENSE
-
-Portions of this material resulted from work developed under a U.S.
-Government Contract and are subject to the following license: the Government
-is granted for itself and others acting on its behalf a paid-up, nonexclusive,
-irrevocable worldwide license in this computer software to reproduce, prepare
-derivative works, and perform publicly and display publicly.
-
-              DISCLAIMER
-
-This computer code material was prepared, in part, as an account of work
-sponsored by an agency of the United States Government.  Neither the United
-States, nor the University of Chicago, nor any of their employees, makes any
-warranty express or implied, or assumes any legal liability or responsibility
-for the accuracy, completeness, or usefulness of any information, apparatus,
-product, or process disclosed, or represents that its use would not infringe
-privately owned rights.
-
+ *  (C) 2012 by Argonne National Laboratory.
+ *      See COPYRIGHT in top-level directory.
  */
 
 /* llapi-perf.c
- *
- * Time how long it takes to issue a stat64() call to the designated file
+ * Time how long it takes to extract various file data from Lustre via
+ * ioctl and llapi calls from every process.  -i uses ioctl, -a uses the
+ * Lustre API.  This also retains the features of stat-perf.c, which
+ * times how long it takes to issue a stat64() call to the designated file
  * from every process.  -f causes it to use fstat64() rather than stat64().  
  * -l causes it to use lseek(SEEK_END) instead of stat64().
  * -c causes it to create the file from scratch rather than operating on an
  *  existing file.  -r issues a realpath() call on the file.
- */
-
-/*
- * Additional bits and pieces were added by Glenn K. Lockwood to test
- * the overheads associated with llapi_file_get_stripe.  Compile on Cray
- * environments with `cc -o llapi-perf llapi-perf.c -llustreapi -dynamic`
  */
 
 #define _LARGEFILE64_SOURCE
@@ -64,8 +28,10 @@ privately owned rights.
 #include <mpi.h>
 #include <errno.h>
 #include <getopt.h>
-#include <lustre/lustreapi.h>
 #include <sys/ioctl.h>
+#ifndef NO_LUSTRE
+#include <lustre/lustreapi.h>
+#endif
 
 static char* opt_file = NULL;
 static int opt_create = 0;
@@ -171,6 +137,10 @@ int main(int argc, char **argv)
    }
    else if ( opt_llapi || opt_ioctl )
    {
+#ifdef NO_LUSTRE
+      fprintf(stderr, "Not compiled with Lustre support\n");
+      ret = -1;
+#else
       struct lov_user_md *lum;
       size_t lumsize = sizeof(struct lov_user_md) +
            LOV_MAX_STRIPE_COUNT * sizeof(struct lov_user_ost_data);
@@ -183,29 +153,39 @@ int main(int argc, char **argv)
       else {
         if ( opt_llapi ) 
         {
-            ret = llapi_file_get_stripe(opt_file, lum);
+         ret = llapi_file_get_stripe(opt_file, lum);
         }
         else if ( opt_ioctl )
         {
             lum->lmm_magic = LOV_USER_MAGIC;
+            lum->lmm_stripe_count = LOV_MAX_STRIPE_COUNT;
             ret = ioctl( fd, LL_IOC_LOV_GETSTRIPE, (void *)lum );
         }
 #ifdef DEBUG
+        /* different API/ioctl calls populate only parts of lum */
         printf( "stripe_width=%d stripe_size=%d starting_ost=%d\n",
              lum->lmm_stripe_count,
              lum->lmm_stripe_size,
              lum->lmm_stripe_count );
 #endif
         }
+#endif
    }
    else
       ret = stat64(opt_file, &statbuf);
 
-   if(ret != 0)
+   if(ret != 0 && !opt_ioctl && !opt_llapi)
    {
       perror("stat64 or fstat64");
       exit(1);
    }
+#ifndef NO_LUSTRE
+   else if ( ret < 0 && opt_ioctl )
+   {
+      perror("ioctl");
+      exit(1);
+   }
+#endif
    
    etime = MPI_Wtime();
 
@@ -237,21 +217,6 @@ int main(int argc, char **argv)
 
    MPI_Finalize();
    return(0);
-}
-
-
-static void usage(void)
-{
-    printf("Usage: stat-perf [<OPTIONS>...] <FILE NAME>\n");
-    printf("\n<OPTIONS> is one or more of\n");
-    printf(" -c       create new file to stat\n");
-    printf(" -p       do file-per-process instead of shared file\n");
-    printf(" -f       use fstat instead of stat\n");
-    printf(" -l       use lseek instead of stat\n");
-    printf(" -r       use realpath instead of stat\n");
-    printf(" -a       use Lustre API test\n");
-    printf(" -i       use ioctl Lustre test\n");
-    printf(" -h       print this help\n");
 }
 
 static int parse_args(int argc, char **argv)
@@ -321,4 +286,29 @@ static int parse_args(int argc, char **argv)
 
    return(0);
 }
+
+static void usage(void)
+{
+    printf("Usage: stat-perf [<OPTIONS>...] <FILE NAME>\n");
+    printf("\n<OPTIONS> is one or more of\n");
+    printf(" -c       create new file to stat\n");
+    printf(" -p       do file-per-process instead of shared file\n");
+    printf(" -f       use fstat instead of stat\n");
+    printf(" -l       use lseek instead of stat\n");
+    printf(" -r       use realpath instead of stat\n");
+    printf(" -a       use Lustre API test\n");
+    printf(" -i       use ioctl Lustre test\n");
+    printf(" -h       print this help\n");
+}
+
+/*
+ * Local variables:
+ *  c-indent-level: 3
+ *  c-basic-offset: 3
+ *  tab-width: 3
+ *
+ * vim: ts=3
+ * End:
+ */ 
+
 
