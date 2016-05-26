@@ -3,3 +3,5 @@ trial.*
 a.out
 test-getstripe
 test-getobdcount
+test-record-malloc
+*.swp
