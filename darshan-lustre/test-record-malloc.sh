@@ -3,7 +3,7 @@
 #  Run the test program through Valgrind to expose memory leaks and buffer
 #  overflows on a variety of different file locations and geometries
 #
-
+set -x
 valgrind --tool=memcheck \
          --leak-check=yes \
          --show-reachable=yes \
@@ -15,3 +15,4 @@ valgrind --tool=memcheck \
          $SCRATCH/stripe_small/1 \
          $HOME/.bashrc \
          $SCRATCH/random.bin
+set +x
