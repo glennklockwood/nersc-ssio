@@ -60,10 +60,10 @@ struct lustre_record_runtime
 
 struct lustre_runtime
 {
-    int    record_array_ndx;  /* number of records defined */
-    size_t record_array_size; /* size of the allocated buffer pointed to by record_array */
-    void   *next_free_record; /* pointer to end of record_array */
-    void   *record_array;     /* buffer in which records are created */
+    int    record_count;   /* number of records defined */
+    size_t record_buffer_size; /* size of the allocated buffer pointed to by record_buffer */
+    void   *next_free_record;  /* pointer to end of record_buffer */
+    void   *record_buffer;     /* buffer in which records are created */
     struct lustre_record_runtime *record_runtime_array;
     struct lustre_record_runtime *record_hash;
 };
@@ -81,12 +81,12 @@ void lustre_runtime_initialize()
     memset(lustre_runtime, 0, sizeof(*lustre_runtime));
 
     /* allocate the full size of the memory limit we are given */
-    lustre_runtime->record_array = malloc(mem_limit);
-    if(!lustre_runtime->record_array)
+    lustre_runtime->record_buffer= malloc(mem_limit);
+    if(!lustre_runtime->record_buffer)
         return;
-    lustre_runtime->record_array_size = mem_limit;
-    lustre_runtime->next_free_record = lustre_runtime->record_array;
-    memset(lustre_runtime->record_array, 0, lustre_runtime->record_array_size);
+    lustre_runtime->record_buffer_size = mem_limit;
+    lustre_runtime->next_free_record = lustre_runtime->record_buffer;
+    memset(lustre_runtime->record_buffer, 0, lustre_runtime->record_buffer_size);
 
     /* allocate array of Lustre runtime data.  we calculate the maximum possible
      * number of records that will fit into mem_limit by assuming that each
@@ -98,8 +98,8 @@ void lustre_runtime_initialize()
     if(!lustre_runtime->record_runtime_array)
     {
         /* back out of initializing this module's records */
-        lustre_runtime->record_array_size = 0;
-        free( lustre_runtime->record_array );
+        lustre_runtime->record_buffer_size = 0;
+        free( lustre_runtime->record_buffer );
         return;
     }
     memset(lustre_runtime->record_runtime_array, 0,
@@ -140,17 +140,17 @@ void darshan_instrument_lustre_file( const char* filepath, int fd )
     rec_size = LUSTRE_RECORD_SIZE( lum->lmm_stripe_count );
 
     printf( "Found %ld stripes\n", lum->lmm_stripe_count );
-    printf( "Memory buffer is %ld bytes\n", lustre_runtime->record_array_size );
+    printf( "Memory buffer is %ld bytes\n", lustre_runtime->record_buffer_size );
     printf( "Base record size is %ld bytes\n", sizeof(struct darshan_lustre_record));
     printf( "Record size will be %ld bytes\n", rec_size );
 
     /* check if adding this record would run us out of memory */
-    if ( (char*)lustre_runtime->next_free_record + rec_size > (char*)lustre_runtime->record_array + lustre_runtime->record_array_size )
+    if ( (char*)lustre_runtime->next_free_record + rec_size > (char*)lustre_runtime->record_buffer + lustre_runtime->record_buffer_size )
     {
         printf( "This record would start at %ld and end at %ld, but our max addressable is %ld\n",
-            (char*)lustre_runtime->next_free_record - (char*)lustre_runtime->record_array,
-            (char*)lustre_runtime->next_free_record + rec_size - (char*)lustre_runtime->record_array,
-            (char*)lustre_runtime->record_array + lustre_runtime->record_array_size - (char*)lustre_runtime->record_array);
+            (char*)lustre_runtime->next_free_record - (char*)lustre_runtime->record_buffer,
+            (char*)lustre_runtime->next_free_record + rec_size - (char*)lustre_runtime->record_buffer,
+            (char*)lustre_runtime->record_buffer + lustre_runtime->record_buffer_size - (char*)lustre_runtime->record_buffer);
 
         printf( "Out of memory!\n" );
         if ( lum )
@@ -161,11 +161,11 @@ void darshan_instrument_lustre_file( const char* filepath, int fd )
     /* check if record is in hash; for this test, we assume that it isn't */
 
     /* add new file record to list */
-    rec_rt = &(lustre_runtime->record_runtime_array[lustre_runtime->record_array_ndx]);
+    rec_rt = &(lustre_runtime->record_runtime_array[lustre_runtime->record_count]);
     rec_rt->record = lustre_runtime->next_free_record;
     lustre_runtime->next_free_record = (char*)(lustre_runtime->next_free_record) + rec_size;
     rec = rec_rt->record;
-    rec->rec_id = lustre_runtime->record_array_ndx; /* XXX */
+    rec->rec_id = lustre_runtime->record_count; /* XXX */
     rec->rank = 0; /* XXX */
 
     if ( lum )
@@ -179,13 +179,13 @@ void darshan_instrument_lustre_file( const char* filepath, int fd )
         free(lum);
     }
 
-    printf( "This record starts at %ld\n", (char*)rec - (char*)lustre_runtime->record_array );
-    printf( "This record's last byte starts at %ld according to what we just wrote\n", 
-        (char*)(&(rec->ost_ids[rec->counters[LUSTRE_STRIPE_WIDTH] - 1])) - (char*)(lustre_runtime->record_array) );
+    printf( "This record starts at %ld\n", (char*)rec - (char*)lustre_runtime->record_buffer );
+    printf( "This record's last element starts at %ld according to what we just wrote\n", 
+        (char*)(&(rec->ost_ids[rec->counters[LUSTRE_STRIPE_WIDTH] - 1])) - (char*)(lustre_runtime->record_buffer) );
     printf( "This record's upper bound is %ld\n",
-        (char*)(rec) + rec_size - (char*)(lustre_runtime->record_array) );
+        (char*)(rec) + rec_size - (char*)(lustre_runtime->record_buffer) );
 
-    lustre_runtime->record_array_ndx++;
+    lustre_runtime->record_count++;
 
     return;
 }
@@ -207,7 +207,7 @@ int main( int argc, char **argv )
     }
 
     /* print what we just loaded */
-    for ( i = 0; i < lustre_runtime->record_array_ndx; i++ )
+    for ( i = 0; i < lustre_runtime->record_count; i++ )
     {
         struct lustre_record_runtime *lrr;
         lrr = &(lustre_runtime->record_runtime_array[i]);
@@ -222,7 +222,7 @@ int main( int argc, char **argv )
         }
     }
     free(lustre_runtime->record_runtime_array);
-    free(lustre_runtime->record_array);
+    free(lustre_runtime->record_buffer);
     free(lustre_runtime);
     return 0;
 }
