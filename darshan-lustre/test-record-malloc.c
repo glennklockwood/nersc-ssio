@@ -70,50 +70,6 @@ struct lustre_runtime
 
 static struct lustre_runtime *lustre_runtime;
 
-void lustre_runtime_initialize()
-{
-    int mem_limit = MEM_LIMIT;
-    int max_records;
-
-    lustre_runtime = malloc(sizeof(*lustre_runtime));
-    if(!lustre_runtime)
-        return;
-    memset(lustre_runtime, 0, sizeof(*lustre_runtime));
-
-    /* allocate the full size of the memory limit we are given */
-    lustre_runtime->record_buffer= malloc(mem_limit);
-    if(!lustre_runtime->record_buffer)
-    {
-        lustre_runtime->record_buffer_size = 0;
-        return;
-    }
-    lustre_runtime->record_buffer_size = mem_limit;
-    lustre_runtime->next_free_record = lustre_runtime->record_buffer;
-    memset(lustre_runtime->record_buffer, 0, lustre_runtime->record_buffer_size);
-
-    /* Allocate array of Lustre runtime data.  We calculate the maximum possible
-     * number of records that will fit into mem_limit by assuming that each
-     * record has the minimum possible OST count, then allocate that many 
-     * runtime records.  record_buffer will always run out of memory before
-     * we overflow record_runtime_array.
-     */
-    max_records = mem_limit / sizeof(struct darshan_lustre_record);
-    printf( "There can be a maximum of %ld records/runtime records\n", max_records );
-    lustre_runtime->record_runtime_array =
-        malloc( max_records * sizeof(struct lustre_record_runtime));
-    if(!lustre_runtime->record_runtime_array)
-    {
-        /* back out of initializing this module's records */
-        lustre_runtime->record_buffer_size = 0;
-        free( lustre_runtime->record_buffer );
-        return;
-    }
-    memset(lustre_runtime->record_runtime_array, 0,
-        max_records * sizeof(struct lustre_record_runtime));
-
-    return;
-}
-
 #define LUSTRE_RECORD_SIZE( osts ) ( sizeof(struct darshan_lustre_record) + sizeof(int64_t) * (osts - 1) )
 
 void darshan_instrument_lustre_file(const char* filepath, int fd)
@@ -194,6 +150,50 @@ void darshan_instrument_lustre_file(const char* filepath, int fd)
         (char*)(rec) + rec_size - (char*)(lustre_runtime->record_buffer) );
 
     lustre_runtime->record_count++;
+
+    return;
+}
+
+void lustre_runtime_initialize()
+{
+    int mem_limit = MEM_LIMIT;
+    int max_records;
+
+    lustre_runtime = malloc(sizeof(*lustre_runtime));
+    if(!lustre_runtime)
+        return;
+    memset(lustre_runtime, 0, sizeof(*lustre_runtime));
+
+    /* allocate the full size of the memory limit we are given */
+    lustre_runtime->record_buffer= malloc(mem_limit);
+    if(!lustre_runtime->record_buffer)
+    {
+        lustre_runtime->record_buffer_size = 0;
+        return;
+    }
+    lustre_runtime->record_buffer_size = mem_limit;
+    lustre_runtime->next_free_record = lustre_runtime->record_buffer;
+    memset(lustre_runtime->record_buffer, 0, lustre_runtime->record_buffer_size);
+
+    /* Allocate array of Lustre runtime data.  We calculate the maximum possible
+     * number of records that will fit into mem_limit by assuming that each
+     * record has the minimum possible OST count, then allocate that many 
+     * runtime records.  record_buffer will always run out of memory before
+     * we overflow record_runtime_array.
+     */
+    max_records = mem_limit / sizeof(struct darshan_lustre_record);
+    printf( "There can be a maximum of %ld records/runtime records\n", max_records );
+    lustre_runtime->record_runtime_array =
+        malloc( max_records * sizeof(struct lustre_record_runtime));
+    if(!lustre_runtime->record_runtime_array)
+    {
+        /* back out of initializing this module's records */
+        lustre_runtime->record_buffer_size = 0;
+        free( lustre_runtime->record_buffer );
+        return;
+    }
+    memset(lustre_runtime->record_runtime_array, 0,
+        max_records * sizeof(struct lustre_record_runtime));
 
     return;
 }
