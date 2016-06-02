@@ -70,7 +70,7 @@ struct lustre_runtime
     struct lustre_record_runtime *record_runtime_hash;
 };
 
-static struct lustre_runtime *lustre_runtime;
+static struct lustre_runtime *lustre_runtime = NULL;
 
 #define LUSTRE_RECORD_SIZE( osts ) ( sizeof(struct darshan_lustre_record) + sizeof(int64_t) * (osts - 1) )
 
@@ -204,6 +204,16 @@ void lustre_runtime_initialize()
     return;
 }
 
+static void lustre_shutdown(void)
+{
+    HASH_CLEAR(hlink, lustre_runtime->record_runtime_hash);
+    free(lustre_runtime->record_runtime_array);
+    free(lustre_runtime->record_buffer);
+    free(lustre_runtime);
+    return;
+}
+
+/* compare function for sorting file records by descending rank */
 static int lustre_record_compare(const void* a_p, const void* b_p)
 {
     const struct lustre_record_runtime* a = a_p;
@@ -356,7 +366,6 @@ int main( int argc, char **argv )
 {
     int fd, i;
     char *fname;
-    struct lustre_record_runtime *rec_rt, *tmp_rec_rt;
 
     lustre_runtime_initialize();
     srand(234);
@@ -377,10 +386,6 @@ int main( int argc, char **argv )
 
 
     /* clean up */
-    HASH_ITER( hlink, lustre_runtime->record_runtime_hash, rec_rt, tmp_rec_rt )
-        HASH_DELETE( hlink, lustre_runtime->record_runtime_hash, rec_rt );
-    free(lustre_runtime->record_runtime_array);
-    free(lustre_runtime->record_buffer);
-    free(lustre_runtime);
+    lustre_shutdown();
     return 0;
 }
