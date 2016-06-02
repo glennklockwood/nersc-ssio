@@ -11,8 +11,12 @@ valgrind --tool=memcheck \
          --track-fds=yes \
          --read-var-info=yes \
          ./test-record-malloc \
+         $SCRATCH/stripe_small/4 \
          $SCRATCH/stripe_large/1tb.bin \
          $SCRATCH/stripe_small/1 \
+         $SCRATCH/stripe_medium/1 \
+         $SCRATCH/stripe_small/2 \
+         $SCRATCH/stripe_small/3 \
          $HOME/.bashrc \
          $SCRATCH/random.bin
 set +x

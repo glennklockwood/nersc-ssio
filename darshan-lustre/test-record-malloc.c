@@ -7,13 +7,13 @@
 #include <sys/ioctl.h>
 #include <lustre/lustre_user.h>
 #include <fcntl.h>
+#include "uthash.h"
 
 #ifndef MEM_LIMIT
     #define MEM_LIMIT 1263
 #endif
 
 typedef int darshan_record_id;
-typedef int UT_hash_handle;
 
 /*******************************************************************************
  *
@@ -55,6 +55,7 @@ struct darshan_lustre_record
 struct lustre_record_runtime
 {
     struct darshan_lustre_record *record;
+    size_t record_size;
     UT_hash_handle hlink;
 };
 
@@ -65,7 +66,7 @@ struct lustre_runtime
     void   *next_free_record;  /* pointer to end of record_buffer */
     void   *record_buffer;     /* buffer in which records are created */
     struct lustre_record_runtime *record_runtime_array;
-    struct lustre_record_runtime *record_hash;
+    struct lustre_record_runtime *record_runtime_hash;
 };
 
 static struct lustre_runtime *lustre_runtime;
@@ -131,10 +132,11 @@ void darshan_instrument_lustre_file(const char* filepath, int fd)
     /* add new file record to list */
     rec_rt = &(lustre_runtime->record_runtime_array[lustre_runtime->record_count]);
     rec_rt->record = lustre_runtime->next_free_record;
+    rec_rt->record_size = rec_size;
     lustre_runtime->next_free_record = (char*)(lustre_runtime->next_free_record) + rec_size;
     rec = rec_rt->record;
     rec->rec_id = lustre_runtime->record_count; /* XXX */
-    rec->rank = 0; /* XXX */
+    rec->rank = rand() % 10; /* XXX */
 
     rec->counters[LUSTRE_STRIPE_SIZE] = lum->lmm_stripe_size;
     rec->counters[LUSTRE_STRIPE_WIDTH] = lum->lmm_stripe_count;
@@ -142,6 +144,8 @@ void darshan_instrument_lustre_file(const char* filepath, int fd)
     for ( i = 0; i < lum->lmm_stripe_count; i++ )
         rec->ost_ids[i] = lum->lmm_objects[i].l_ost_idx;
     free(lum);
+
+    HASH_ADD(hlink, lustre_runtime->record_runtime_hash, record->rec_id, sizeof(darshan_record_id), rec_rt);
 
     printf( "This record starts at %ld\n", (char*)rec - (char*)lustre_runtime->record_buffer );
     printf( "This record's last element starts at %ld according to what we just wrote\n", 
@@ -198,22 +202,9 @@ void lustre_runtime_initialize()
     return;
 }
 
-int main( int argc, char **argv )
+void print_lustre_runtime( void )
 {
     int i, j;
-    int fd;
-    char *fname;
-    lustre_runtime_initialize();
-
-    for ( i = 1; i < argc; i++ )
-    {
-        fname = argv[i];
-        printf( "\nProcessing %s\n", fname );
-        fd = open( fname, O_RDONLY );
-        darshan_instrument_lustre_file( fname, fd );
-        close(fd);
-    }
-
     /* print what we just loaded */
     for ( i = 0; i < lustre_runtime->record_count; i++ )
     {
@@ -229,6 +220,142 @@ int main( int argc, char **argv )
             printf( "  Stripe %2d: %ld\n", j, lrr->record->ost_ids[j] );
         }
     }
+    return;
+}
+
+static int lustre_record_compare(const void* a_p, const void* b_p)
+{
+    const struct lustre_record_runtime* a = a_p;
+    const struct lustre_record_runtime* b = b_p;
+
+    if(a->record->rank < b->record->rank)
+        return 1;
+    if(a->record->rank > b->record->rank)
+        return -1;
+
+    return 0;
+}
+
+void print_array( void )
+{
+    int i = 0;
+    struct lustre_record_runtime *rec_rt;
+    printf("*** DUMPING RECORD LIST BY ARRAY SEQUENCE\n");
+    for ( i; i < lustre_runtime->record_count; i++ )
+    {
+        rec_rt = &(lustre_runtime->record_runtime_array[i]);
+        printf( "*** record %d rank %d osts %d\n", 
+            rec_rt->record->rec_id, 
+            rec_rt->record->rank,
+            rec_rt->record->counters[LUSTRE_STRIPE_WIDTH]);
+    }
+}
+void print_hash( void )
+{
+    struct lustre_record_runtime *rec_rt, *tmp_rec_rt;
+    printf("*** DUMPING RECORD LIST BY HASH SEQUENCE\n");
+    HASH_ITER( hlink, lustre_runtime->record_runtime_hash, rec_rt, tmp_rec_rt )
+    {
+        printf( "*** record %d rank %d osts %d\n", 
+            rec_rt->record->rec_id, 
+            rec_rt->record->rank,
+            rec_rt->record->counters[LUSTRE_STRIPE_WIDTH]);
+    }
+    return;
+}
+
+int sort_lustre()
+{
+    int i;
+    struct darshan_lustre_record *rec;
+    struct lustre_record_runtime *rec_rt, *tmp_rec_rt;
+    char  *new_buf, *p;
+    size_t new_buf_sz = 0;
+
+    for ( i = 0; i < lustre_runtime->record_count; i++ )
+        new_buf_sz += (lustre_runtime->record_runtime_array[i]).record_size;
+
+    new_buf = malloc(new_buf_sz);
+    p = new_buf;
+
+/*******************************************************************************
+ *  Sort the hash rather than the array
+ *******************************************************************************
+    print_hash();
+    HASH_SRT(hlink, lustre_runtime->record_runtime_hash, lustre_record_compare);
+    print_hash();
+    HASH_ITER(hlink, lustre_runtime->record_runtime_hash, rec_rt, tmp_rec_rt)
+    {
+        memcpy( p, rec_rt->record, rec_rt->record_size );
+        p += rec_rt->record_size;
+    }
+ *
+ */
+
+/*******************************************************************************
+ *  Sort the array
+ ******************************************************************************/
+
+    /*  qsort breaks the hash table, so we should delete it with the intent of
+     *  rebuilding it.
+     *
+     *  Actually I can't show that qsorting breaks the hash table.  Maybe uthash
+     *  can survive things like memcpys?
+     *
+    print_hash();
+    HASH_ITER( hlink, lustre_runtime->record_runtime_hash, rec_rt, tmp_rec_rt )
+        HASH_DELETE( hlink, lustre_runtime->record_runtime_hash, rec_rt );
+    print_hash();
+     */
+
+    print_array();
+    qsort(lustre_runtime->record_runtime_array, lustre_runtime->record_count,
+        sizeof(struct lustre_record_runtime), lustre_record_compare);
+    print_array();
+    printf( "Did we destroy our hash table?\n");
+    print_hash();
+
+/*
+ *  Reconstruct the hash table after destroying and rearranging it
+ *
+    for ( i = 0; i < lustre_runtime->record_count; i++ )
+    {
+        rec_rt = &(lustre_runtime->record_runtime_array[i]);
+        HASH_ADD(hlink, lustre_runtime->record_runtime_hash, record->rec_id, sizeof(darshan_record_id), rec_rt );
+    }
+    printf("Just rebuilt the hash after sorting\n");
+    print_hash();
+ *
+ */
+
+    free(new_buf);
+}
+
+int main( int argc, char **argv )
+{
+    int fd, i;
+    char *fname;
+    struct lustre_record_runtime *rec_rt, *tmp_rec_rt;
+
+    lustre_runtime_initialize();
+    srand(234);
+
+    /* build Darshan records */
+    for ( i = 1; i < argc; i++ )
+    {
+        fname = argv[i];
+        printf( "\nProcessing %s\n", fname );
+        fd = open( fname, O_RDONLY );
+        darshan_instrument_lustre_file( fname, fd );
+        close(fd);
+    }
+
+    print_lustre_runtime();
+    sort_lustre();
+
+    /* clean up */
+    HASH_ITER( hlink, lustre_runtime->record_runtime_hash, rec_rt, tmp_rec_rt )
+        HASH_DELETE( hlink, lustre_runtime->record_runtime_hash, rec_rt );
     free(lustre_runtime->record_runtime_array);
     free(lustre_runtime->record_buffer);
     free(lustre_runtime);
