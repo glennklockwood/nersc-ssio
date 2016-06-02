@@ -14,6 +14,10 @@
 #endif
 
 typedef int darshan_record_id;
+size_t rel_addr( void *addr, void *base );
+void print_hash( void );
+void print_array( void );
+void print_lustre_runtime( void );
 
 /*******************************************************************************
  *
@@ -71,6 +75,8 @@ struct lustre_runtime
 };
 
 static struct lustre_runtime *lustre_runtime = NULL;
+
+static int instrumentation_disabled = 0;
 
 #define LUSTRE_RECORD_SIZE( osts ) ( sizeof(struct darshan_lustre_record) + sizeof(int64_t) * (osts - 1) )
 
@@ -160,11 +166,19 @@ void darshan_instrument_lustre_file(const char* filepath, int fd)
     return;
 }
 
-void lustre_runtime_initialize()
+static void lustre_runtime_initialize()
 {
     int mem_limit = MEM_LIMIT;
     int max_records;
 
+    /* don't do anything if already initialized or instrumenation is disabled */
+    if(lustre_runtime || instrumentation_disabled)
+        return;
+
+    /* return if no memory assigned by darshan core */
+    if(mem_limit == 0)
+        return;
+ 
     lustre_runtime = malloc(sizeof(*lustre_runtime));
     if(!lustre_runtime)
         return;
@@ -193,7 +207,6 @@ void lustre_runtime_initialize()
         malloc( max_records * sizeof(struct lustre_record_runtime));
     if(!lustre_runtime->record_runtime_array)
     {
-        /* back out of initializing this module's records */
         lustre_runtime->record_buffer_max = 0;
         free( lustre_runtime->record_buffer );
         return;
@@ -206,10 +219,13 @@ void lustre_runtime_initialize()
 
 static void lustre_shutdown(void)
 {
+
     HASH_CLEAR(hlink, lustre_runtime->record_runtime_hash);
     free(lustre_runtime->record_runtime_array);
     free(lustre_runtime->record_buffer);
     free(lustre_runtime);
+    lustre_runtime = NULL;
+
     return;
 }
 
@@ -225,73 +241,6 @@ static int lustre_record_compare(const void* a_p, const void* b_p)
         return -1;
 
     return 0;
-}
-
-/*
- *  Dump the memory structure of our records and runtime records
- */
-void print_lustre_runtime( void )
-{
-    int i, j;
-    struct darshan_lustre_record *rec;
-
-    /* print what we just loaded */
-    for ( i = 0; i < lustre_runtime->record_count; i++ )
-    {
-        rec = (lustre_runtime->record_runtime_array[i]).record;
-        printf( "File %2d\n", i );
-        for ( j = 0; j < LUSTRE_NUM_INDICES; j++ )
-        {
-            printf( "  Counter %2d: %10ld, addr %ld\n", 
-                j, 
-                rec->counters[j],
-                (char*)(&(rec->counters[j])) - (char*)(lustre_runtime->record_buffer) );
-        }
-        for ( j = 0; j < rec->counters[LUSTRE_STRIPE_WIDTH]; j++ )
-        {
-            printf( "  Stripe  %2d: %10ld, addr %ld\n", 
-                j, 
-                rec->ost_ids[j],
-                (char*)(&(rec->ost_ids[j])) - (char*)(lustre_runtime->record_buffer) );
-        }
-    }
-    return;
-}
-
-/*
- *  Dump the order in which records appear in memory
- */
-void print_array( void )
-{
-    int i;
-    struct lustre_record_runtime *rec_rt;
-    printf("*** DUMPING RECORD LIST BY ARRAY SEQUENCE\n");
-    for ( i = 0; i < lustre_runtime->record_count; i++ )
-    {
-        rec_rt = &(lustre_runtime->record_runtime_array[i]);
-        printf( "*** record %d rank %d osts %d\n", 
-            rec_rt->record->rec_id, 
-            rec_rt->record->rank,
-            rec_rt->record->counters[LUSTRE_STRIPE_WIDTH]);
-    }
-}
-void print_hash( void )
-{
-    struct lustre_record_runtime *rec_rt, *tmp_rec_rt;
-    printf("*** DUMPING RECORD LIST BY HASH SEQUENCE\n");
-    HASH_ITER( hlink, lustre_runtime->record_runtime_hash, rec_rt, tmp_rec_rt )
-    {
-        printf( "*** record %d rank %d osts %d\n", 
-            rec_rt->record->rec_id, 
-            rec_rt->record->rank,
-            rec_rt->record->counters[LUSTRE_STRIPE_WIDTH]);
-    }
-    return;
-}
-
-size_t rel_addr( void *addr, void *base )
-{
-    return (size_t)((char*)(addr) - (char*)(base));
 }
 
 /*
@@ -360,6 +309,75 @@ int sort_lustre_records()
 
     free(new_buf);
     return 0;
+}
+
+
+
+/*
+ *  Dump the memory structure of our records and runtime records
+ */
+void print_lustre_runtime( void )
+{
+    int i, j;
+    struct darshan_lustre_record *rec;
+
+    /* print what we just loaded */
+    for ( i = 0; i < lustre_runtime->record_count; i++ )
+    {
+        rec = (lustre_runtime->record_runtime_array[i]).record;
+        printf( "File %2d\n", i );
+        for ( j = 0; j < LUSTRE_NUM_INDICES; j++ )
+        {
+            printf( "  Counter %2d: %10ld, addr %ld\n", 
+                j, 
+                rec->counters[j],
+                (char*)(&(rec->counters[j])) - (char*)(lustre_runtime->record_buffer) );
+        }
+        for ( j = 0; j < rec->counters[LUSTRE_STRIPE_WIDTH]; j++ )
+        {
+            printf( "  Stripe  %2d: %10ld, addr %ld\n", 
+                j, 
+                rec->ost_ids[j],
+                (char*)(&(rec->ost_ids[j])) - (char*)(lustre_runtime->record_buffer) );
+        }
+    }
+    return;
+}
+
+/*
+ *  Dump the order in which records appear in memory
+ */
+void print_array( void )
+{
+    int i;
+    struct lustre_record_runtime *rec_rt;
+    printf("*** DUMPING RECORD LIST BY ARRAY SEQUENCE\n");
+    for ( i = 0; i < lustre_runtime->record_count; i++ )
+    {
+        rec_rt = &(lustre_runtime->record_runtime_array[i]);
+        printf( "*** record %d rank %d osts %d\n", 
+            rec_rt->record->rec_id, 
+            rec_rt->record->rank,
+            rec_rt->record->counters[LUSTRE_STRIPE_WIDTH]);
+    }
+}
+void print_hash( void )
+{
+    struct lustre_record_runtime *rec_rt, *tmp_rec_rt;
+    printf("*** DUMPING RECORD LIST BY HASH SEQUENCE\n");
+    HASH_ITER( hlink, lustre_runtime->record_runtime_hash, rec_rt, tmp_rec_rt )
+    {
+        printf( "*** record %d rank %d osts %d\n", 
+            rec_rt->record->rec_id, 
+            rec_rt->record->rank,
+            rec_rt->record->counters[LUSTRE_STRIPE_WIDTH]);
+    }
+    return;
+}
+
+size_t rel_addr( void *addr, void *base )
+{
+    return (size_t)((char*)(addr) - (char*)(base));
 }
 
 int main( int argc, char **argv )
