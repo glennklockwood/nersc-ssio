@@ -123,7 +123,7 @@ if __name__ == '__main__':
     else:
         fstype="dvs"
 
-    if sys.argv[1].endswith( 'tgz' ) or sys.argv[1].endswith( '.tar.gz' ):
+    if sys.argv[1].endswith( 'tgz' ) or sys.argv[1].endswith( '.tar.gz' ) or sys.argv[1].endswith( '.tar' ):
         all_counter_data = ingest_counter_data_tgz( sys.argv[1], fstype )
     else:
         all_counter_data = ingest_counter_data_filenames( sys.argv[1:], fstype )
