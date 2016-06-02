@@ -62,7 +62,8 @@ struct lustre_record_runtime
 struct lustre_runtime
 {
     int    record_count;   /* number of records defined */
-    size_t record_buffer_size; /* size of the allocated buffer pointed to by record_buffer */
+    size_t record_buffer_max;  /* size of the allocated buffer pointed to by record_buffer */
+    size_t record_buffer_used; /* size of the allocated buffer actually used */
     void   *next_free_record;  /* pointer to end of record_buffer */
     void   *record_buffer;     /* buffer in which records are created */
     struct lustre_record_runtime *record_runtime_array;
@@ -103,14 +104,14 @@ void darshan_instrument_lustre_file(const char* filepath, int fd)
     rec_size = LUSTRE_RECORD_SIZE( lum->lmm_stripe_count );
 
     printf( "Found %ld stripes\n", lum->lmm_stripe_count );
-    printf( "Memory buffer is %ld bytes\n", lustre_runtime->record_buffer_size );
+    printf( "Memory buffer is %ld bytes\n", lustre_runtime->record_buffer_max );
     printf( "Base record size is %ld bytes\n", sizeof(struct darshan_lustre_record));
     printf( "Record size will be %ld bytes\n", rec_size );
 
     {
         /* broken out for clarity */
         void *end_of_new_record = (char*)lustre_runtime->next_free_record + rec_size;
-        void *end_of_rec_buffer = (char*)lustre_runtime->record_buffer + lustre_runtime->record_buffer_size;
+        void *end_of_rec_buffer = (char*)lustre_runtime->record_buffer + lustre_runtime->record_buffer_max;
         limit_flag = ( end_of_new_record > end_of_rec_buffer );
     }
     /* check if adding this record would run us out of memory */
@@ -119,7 +120,7 @@ void darshan_instrument_lustre_file(const char* filepath, int fd)
         printf( "This record would start at %ld and end at %ld, but our max addressable is %ld\n",
             (char*)lustre_runtime->next_free_record - (char*)lustre_runtime->record_buffer,
             (char*)lustre_runtime->next_free_record + rec_size - (char*)lustre_runtime->record_buffer,
-            (char*)lustre_runtime->record_buffer + lustre_runtime->record_buffer_size - (char*)lustre_runtime->record_buffer);
+            (char*)lustre_runtime->record_buffer + lustre_runtime->record_buffer_max - (char*)lustre_runtime->record_buffer);
 
         printf( "Out of memory!\n" );
         free(lum);
@@ -134,6 +135,7 @@ void darshan_instrument_lustre_file(const char* filepath, int fd)
     rec_rt->record = lustre_runtime->next_free_record;
     rec_rt->record_size = rec_size;
     lustre_runtime->next_free_record = (char*)(lustre_runtime->next_free_record) + rec_size;
+    lustre_runtime->record_buffer_used += rec_size;
     rec = rec_rt->record;
     rec->rec_id = lustre_runtime->record_count; /* XXX */
     rec->rank = rand() % 10; /* XXX */
@@ -172,12 +174,12 @@ void lustre_runtime_initialize()
     lustre_runtime->record_buffer= malloc(mem_limit);
     if(!lustre_runtime->record_buffer)
     {
-        lustre_runtime->record_buffer_size = 0;
+        lustre_runtime->record_buffer_max = 0;
         return;
     }
-    lustre_runtime->record_buffer_size = mem_limit;
+    lustre_runtime->record_buffer_max = mem_limit;
     lustre_runtime->next_free_record = lustre_runtime->record_buffer;
-    memset(lustre_runtime->record_buffer, 0, lustre_runtime->record_buffer_size);
+    memset(lustre_runtime->record_buffer, 0, lustre_runtime->record_buffer_max);
 
     /* Allocate array of Lustre runtime data.  We calculate the maximum possible
      * number of records that will fit into mem_limit by assuming that each
@@ -192,34 +194,13 @@ void lustre_runtime_initialize()
     if(!lustre_runtime->record_runtime_array)
     {
         /* back out of initializing this module's records */
-        lustre_runtime->record_buffer_size = 0;
+        lustre_runtime->record_buffer_max = 0;
         free( lustre_runtime->record_buffer );
         return;
     }
     memset(lustre_runtime->record_runtime_array, 0,
         max_records * sizeof(struct lustre_record_runtime));
 
-    return;
-}
-
-void print_lustre_runtime( void )
-{
-    int i, j;
-    /* print what we just loaded */
-    for ( i = 0; i < lustre_runtime->record_count; i++ )
-    {
-        struct lustre_record_runtime *lrr;
-        lrr = &(lustre_runtime->record_runtime_array[i]);
-        printf( "File %2d\n", i );
-        for ( j = 0; j < LUSTRE_NUM_INDICES; j++ )
-        {
-            printf( "  Counter %2d: %ld\n", j, lrr->record->counters[j] );
-        }
-        for ( j = 0; j < lrr->record->counters[LUSTRE_STRIPE_WIDTH]; j++ )
-        {
-            printf( "  Stripe %2d: %ld\n", j, lrr->record->ost_ids[j] );
-        }
-    }
     return;
 }
 
@@ -236,12 +217,46 @@ static int lustre_record_compare(const void* a_p, const void* b_p)
     return 0;
 }
 
+/*
+ *  Dump the memory structure of our records and runtime records
+ */
+void print_lustre_runtime( void )
+{
+    int i, j;
+    struct darshan_lustre_record *rec;
+
+    /* print what we just loaded */
+    for ( i = 0; i < lustre_runtime->record_count; i++ )
+    {
+        rec = (lustre_runtime->record_runtime_array[i]).record;
+        printf( "File %2d\n", i );
+        for ( j = 0; j < LUSTRE_NUM_INDICES; j++ )
+        {
+            printf( "  Counter %2d: %10ld, addr %ld\n", 
+                j, 
+                rec->counters[j],
+                (char*)(&(rec->counters[j])) - (char*)(lustre_runtime->record_buffer) );
+        }
+        for ( j = 0; j < rec->counters[LUSTRE_STRIPE_WIDTH]; j++ )
+        {
+            printf( "  Stripe  %2d: %10ld, addr %ld\n", 
+                j, 
+                rec->ost_ids[j],
+                (char*)(&(rec->ost_ids[j])) - (char*)(lustre_runtime->record_buffer) );
+        }
+    }
+    return;
+}
+
+/*
+ *  Dump the order in which records appear in memory
+ */
 void print_array( void )
 {
-    int i = 0;
+    int i;
     struct lustre_record_runtime *rec_rt;
     printf("*** DUMPING RECORD LIST BY ARRAY SEQUENCE\n");
-    for ( i; i < lustre_runtime->record_count; i++ )
+    for ( i = 0; i < lustre_runtime->record_count; i++ )
     {
         rec_rt = &(lustre_runtime->record_runtime_array[i]);
         printf( "*** record %d rank %d osts %d\n", 
@@ -264,71 +279,77 @@ void print_hash( void )
     return;
 }
 
-int sort_lustre()
+size_t rel_addr( void *addr, void *base )
+{
+    return (size_t)((char*)(addr) - (char*)(base));
+}
+
+/*
+ * Sort the record_runtimes and records by MPI rank to facilitate shared redux.
+ * This requires craftiness and additional heap utilization because the records
+ * (but not record_runtimes) have variable size.  Currently has to temporarily
+ * duplicate the entire record_buffer; there is room for more memory-efficient
+ * optimization if this becomes a scalability issue.
+ */
+int sort_lustre_records()
 {
     int i;
     struct darshan_lustre_record *rec;
     struct lustre_record_runtime *rec_rt, *tmp_rec_rt;
     char  *new_buf, *p;
-    size_t new_buf_sz = 0;
 
-    for ( i = 0; i < lustre_runtime->record_count; i++ )
-        new_buf_sz += (lustre_runtime->record_runtime_array[i]).record_size;
-
-    new_buf = malloc(new_buf_sz);
+    /* Create a new buffer to store an entire replica of record_buffer.  Since
+     * we know the exact size of record_buffer's useful data at this point, we
+     * can allocate the exact amount we need instead of record_buffer_max */
+    new_buf = malloc(lustre_runtime->record_buffer_used);
     p = new_buf;
+    if ( !new_buf )
+        return 1;
 
-/*******************************************************************************
- *  Sort the hash rather than the array
- *******************************************************************************
-    print_hash();
-    HASH_SRT(hlink, lustre_runtime->record_runtime_hash, lustre_record_compare);
-    print_hash();
-    HASH_ITER(hlink, lustre_runtime->record_runtime_hash, rec_rt, tmp_rec_rt)
-    {
-        memcpy( p, rec_rt->record, rec_rt->record_size );
-        p += rec_rt->record_size;
-    }
- *
- */
-
-/*******************************************************************************
- *  Sort the array
- ******************************************************************************/
-
-    /*  qsort breaks the hash table, so we should delete it with the intent of
-     *  rebuilding it.
-     *
-     *  Actually I can't show that qsorting breaks the hash table.  Maybe uthash
-     *  can survive things like memcpys?
-     *
-    print_hash();
+    /* qsort breaks the hash table, so delete it now to free its memory buffers
+     * and prevent later confusion */
     HASH_ITER( hlink, lustre_runtime->record_runtime_hash, rec_rt, tmp_rec_rt )
         HASH_DELETE( hlink, lustre_runtime->record_runtime_hash, rec_rt );
-    print_hash();
-     */
 
-    print_array();
-    qsort(lustre_runtime->record_runtime_array, lustre_runtime->record_count,
-        sizeof(struct lustre_record_runtime), lustre_record_compare);
-    print_array();
-    printf( "Did we destroy our hash table?\n");
-    print_hash();
+    /* sort the runtime records, which is has fixed-length elements */
+    qsort(
+        lustre_runtime->record_runtime_array,
+        lustre_runtime->record_count,
+        sizeof(struct lustre_record_runtime),
+        lustre_record_compare
+    );
 
-/*
- *  Reconstruct the hash table after destroying and rearranging it
- *
+    /* rebuild the hash and array with the qsorted runtime records */
     for ( i = 0; i < lustre_runtime->record_count; i++ )
     {
         rec_rt = &(lustre_runtime->record_runtime_array[i]);
         HASH_ADD(hlink, lustre_runtime->record_runtime_hash, record->rec_id, sizeof(darshan_record_id), rec_rt );
     }
-    printf("Just rebuilt the hash after sorting\n");
-    print_hash();
- *
- */
+
+    /* create reordered record buffer, then copy it back in place */
+    for ( i = 0; i < lustre_runtime->record_count; i++ )
+    {
+        rec_rt = &(lustre_runtime->record_runtime_array[i]);
+        memcpy( p, rec_rt->record, rec_rt->record_size );
+        printf( "Moving %d from 0x%08d to 0x%08d (%ld bytes)\n",
+            i,
+            rel_addr(rec_rt->record, (lustre_runtime->record_runtime_array[0]).record),
+            rel_addr(p, new_buf),
+            rec_rt->record_size );
+        /* fix record pointers within each runtime record too - pre-emptively
+         * point them at where they will live in record_buffer after we memcpy
+         * below */
+        rec_rt->record = (struct darshan_lustre_record *)((char*)(lustre_runtime->record_buffer) + (p - new_buf));
+
+        p += rec_rt->record_size;
+    }
+    memcpy( 
+        lustre_runtime->record_buffer, 
+        new_buf, 
+        lustre_runtime->record_buffer_used );
 
     free(new_buf);
+    return 0;
 }
 
 int main( int argc, char **argv )
@@ -351,7 +372,9 @@ int main( int argc, char **argv )
     }
 
     print_lustre_runtime();
-    sort_lustre();
+    sort_lustre_records();
+    print_lustre_runtime();
+
 
     /* clean up */
     HASH_ITER( hlink, lustre_runtime->record_runtime_hash, rec_rt, tmp_rec_rt )
