@@ -147,6 +147,16 @@ if __name__ == '__main__':
             all_counters.add(min_key)
             all_counters.add(max_key)
 
+    ### {read,write}_bytes and osc_{read_write} encode four useful counters
+    key_suffixes = [ '_ops', '_min_size', '_max_size', '_total_bytes' ]
+    for counter in ( 'read_bytes', 'write_bytes', 'osc_read', 'osc_write' ):
+        for node in [ x for x in all_counter_data if counter in all_counter_data[x] ]:
+            for i, key_suffix in enumerate(key_suffixes):
+                new_key = counter + key_suffix
+                all_counter_data[node][new_key] = [ all_counter_data[node][counter][i] ]
+                all_counters.add(new_key)
+        all_counters.discard(counter)
+
     ### Normalize the data so that each node-counter pair has exactly one value.
     ### Also implicitly assume all counter values are integers; floating point
     ### counters will cause type mismatches within the dataframe column

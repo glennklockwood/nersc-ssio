@@ -21,8 +21,7 @@ def parse_concatenated_llite_stats( fp ):
     counter_pages = []
     for line in fp:
         ### digest the line
-        key, value_string = _extract_kv( line )
-        values = []
+        key, values = _extract_kv( line )
         if key in key_counts: # not the first time seeing this counter
             key_counts[key] += 1
             if key_counts[key] > this_page_num: # new page detected
@@ -31,13 +30,6 @@ def parse_concatenated_llite_stats( fp ):
                 this_page = {}
         else: # first time seeing this counter
            key_counts[key] = 1
-
-        ### cast counter values into ints or floats
-        for value in value_string.strip().split():
-            if '.' in value:
-                values.append( float( value ) )
-            else:
-                values.append( int( value ) )
 
         ### Add this counter to the page currently being built
         this_page[key] = values
@@ -55,27 +47,58 @@ def parse_llite_stats( fp ):
 
     for line in fp:
         k, v = _extract_kv( line )
-        data[k] = []
-        for element in v.strip().split():
-            if '.' in element:
-                data[k].append( float(element) )
-            else:
-                data[k].append( int(element) )
+        data[k] = v
 
     return data
 
 def _extract_kv( line ):
-    tokens = line.split()
-    key, value = None, None
+    """
+    Lustre does not use a consistent format for its procfs counters
+    interface.  We must deal with the following possibilities:
+
+    ## stats
+    snapshot_time             1465429958.452678 secs.usecs
+    read_bytes                4560934621 samples [bytes] 1 2147479552 1957691429756371
+    write_bytes               3364345392 samples [bytes] 1 2147479552 157804380246588
+
+    ## read_ahead_stats
+    hit max r-a issue         12622218315 samples [pages]
+    failed to reach end       12684129648 samples [pages]
+
+    ## statahead_stats
+    statahead total: 2152972
+    statahead wrong: 20440
+    agl total: 2152972
+
+    ## max_cached_mb
+    users: 248
+    max_cached_mb: 258209
+    used_mb: 242069
+    """
+    tokens = line.strip().split()
+    key = None
+    values = []
     for i, tok in enumerate(tokens):
+        ### deal with `read_ahead_stats` which has no simple key-value delimiter
+        ### also takes care of *most* of `stats`
         if tok.startswith('['):
-            value = tokens[i - 2]
+            values = tokens[i - 2:]
             key = '_'.join(tokens[0:i-2])
             break
     if key is None:
-        key, value = tokens[0:2] 
+        key, values = ( tokens[0].rstrip(':'), tokens[1:] )
 
-    return key, value
+    output_values = []
+    for value in values:
+        try:
+            if '.' in value:
+                output_values.append( float( value ) )
+            else:
+                output_values.append( int( value ) )
+        except ValueError:
+            pass
+
+    return key, output_values
 
 if __name__ == '__main__':
     main()
