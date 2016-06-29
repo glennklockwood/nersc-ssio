@@ -12,13 +12,15 @@ use strict;
 use warnings;
 
 my %data;
+my $count = 0;
 
 foreach my $filename ( @ARGV ) {
     if ( -e $filename ) {
         foreach my $line ( `darshan-parser $filename` ) {
             next if $line =~ m/^\s*(#|\s*$)/;
             my ( $rank, $hash, $key, $val, $fname, $fs, $fstype ) = split(m/\s+/, $line);
-            if ( $fstype eq "lustre" && $key =~ m/^CP_BYTES_(\S+)/ ) {
+            ### bytes in/out
+            if ( $key =~ m/^CP_BYTES_(\S+)/ ) {
                 $data{$fs}{lc($1)} += $val;
             }
         }
@@ -26,8 +28,13 @@ foreach my $filename ( @ARGV ) {
     else {
         warn "Couldn't find $filename";
     }
+    $count++;
+    if ( $count % 100 ) {
+        printf( "." );
+    }
 
 }
+printf( "\n" ) if $count > 100;
 
 printf( "%12s %15s %15s\n", "FS", "Written", "Read" );
 foreach my $key ( keys(%data) ) {
