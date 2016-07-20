@@ -56,8 +56,8 @@ def print_hourly_summary( f ):
 
     tot_read, tot_write = 0.0, 0.0
     for timestep in range( f['FSStepsGroup/FSStepsDataSet'].shape[0] / _TIMESTEPS_PER_BIN ):
-        istart = timestep * _TIMESTEPS_PER_BIN 
-        istop  = istart + _TIMESTEPS_PER_BIN - 1
+        istart = timestep * _TIMESTEPS_PER_BIN  # inclusive
+        istop  = istart + _TIMESTEPS_PER_BIN    # exclusive
 
         vol_read  = f['OSTReadGroup/OSTBulkReadDataSet'][:,istart:istop].sum() * _LMT_TIMESTEP
         vol_write = f['OSTWriteGroup/OSTBulkWriteDataSet'][:,istart:istop].sum() * _LMT_TIMESTEP
