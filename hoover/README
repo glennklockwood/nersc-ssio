@@ -1,0 +1,11 @@
+HOOVER
+================================================================================
+
+Hoover is the framework we will use to recover incomplete Darshan logs from
+compute nodes' ramdisks and reconstruct valid Darshan logs.
+
+It is a three-component system that uses RabbitMQ to transport and load balance
+pieces of Darshan logs.  The current architectural documentation can be found
+here:
+
+https://sites.google.com/a/lbl.gov/glennklockwood/nersc-infrastructure/rabbitmq
