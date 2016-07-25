@@ -4,15 +4,15 @@
 #  node-specific file.  Intended to be called before and after an MPI job
 #  using srun, e.g.,
 #  
-#      srun -ntasks-per-node=1 $PWD/drop_bb_stats.sh
+#      srun -ntasks-per-node=1 $PWD/drop_bb_stats.sh $SLURM_SUBMIT_DIR
 #      srun ./my_mpi_job
-#      srun -ntasks-per-node=1 $PWD/drop_bb_stats.sh
+#      srun -ntasks-per-node=1 $PWD/drop_bb_stats.sh $SLURM_SUBMIT_DIR
 #
 #   The resulting files can then be processed using the included 
 #   diff_concatenated_dvs_stats.py script.
 #
 
-OUTPUT_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
+OUTPUT_DIR="${1:-$SLURM_SUBMIT_DIR}"
 
 DW_DIR="${DW_JOB_STRIPED:-$DW_JOB_PRIVATE}"
 
