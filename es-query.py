@@ -13,7 +13,7 @@ import pycurl
 _INDEX = 'cori-collectd-*'
 _QUERY = 'hostname:bb* AND plugin:disk AND plugin_instance:nvme*'
 _LIMIT_OUTPUT = 10
-_API_ENDPOINT = 'http://192.168.85.178:9200/%s/_search' % _INDEX
+_API_ENDPOINT = 'http://localhost:9200/%s/_search' % _INDEX
 
 _QUERY_DICT = {
     "size": _LIMIT_OUTPUT,
