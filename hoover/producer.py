@@ -9,28 +9,46 @@ import sys
 import glob
 import json
 import pika
-import hashlib
+import StringIO
+import hoover
 
 _HOOVER_EXCHANGE = 'darshanlogs'
 
-def send_message( channel, message, exchange=_HOOVER_EXCHANGE, routing_key='' ):
+def send_message( channel, body, exchange=_HOOVER_EXCHANGE, routing_key='', headers={} ):
     channel.exchange_declare( exchange=exchange, type='direct' )
     print "Sending message to exchange [%s] with routing_key [%s]" % ( exchange, routing_key )
     return channel.basic_publish(
         exchange=exchange,
         routing_key=routing_key,
-        body=message,
-        properties=pika.BasicProperties( delivery_mode=2 ))
+        body=body,
+        properties=pika.BasicProperties(headers=headers, delivery_mode=2 ))
 
-def hoover( glob_str ):
+def produce( glob_str ):
     filenames = glob.glob( glob_str )
+
+    manifest = build_manifest( filenames )
+    manifest_json = json.dumps(manifest)
+    manifest_cksum = hoover.checksum(StringIO.StringIO(manifest_json))
 
     conn = pika.BlockingConnection( pika.ConnectionParameters( 'localhost' ) )
     channel = conn.channel()
-    send_message( channel, build_manifest( filenames ), routing_key='logs' )
+
+    send_message( 
+        channel=channel,
+        body=manifest_json,
+        routing_key='logs',
+        headers={ 'checksum': manifest_cksum })
+
+    for manifest_entry in manifest:
+        # TODO: add failsafe in case message can't be opened...
+        with open( manifest_entry['filename'], 'r' ) as fp:
+            send_message( 
+                channel=channel,
+                body=fp.read(),
+                routing_key='logs',
+                headers=manifest_entry )
 
     conn.close()
-        
 
 def build_manifest( filenames ):
     manifest = []
@@ -38,18 +56,9 @@ def build_manifest( filenames ):
         manifest.append( {
             'filename': filename,
             'size':     os.path.getsize(filename),
-            'sha1':     sha1sum( filename )
+            'checksum': hoover.checksum_file( filename )
         } )
-    return json.dumps( manifest )
-
-def sha1sum( filename, blocksize=2**30 ):
-    hasher = hashlib.new('sha1')
-    with open(filename, 'rb') as f:
-        buf = f.read(blocksize)
-        while len(buf) > 0:
-            hasher.update(buf)
-            buf = f.read(blocksize)
-    return hasher.hexdigest()
+    return manifest
 
 if __name__ == '__main__':
-    hoover( sys.argv[1] )
+    produce( sys.argv[1] )
