@@ -64,19 +64,25 @@ def print_hourly_summary( f ):
         tot_read  += vol_read
         tot_write += vol_write
         if args.bytes:
-            print "%3d %5d %5d %15ld %15ld" % (
+            print "%3d %5d %5d %15ld %15ld %s %s" % (
                 timestep,
                 istart,
                 istop,
                 vol_read,
-                vol_write)
+                vol_write,
+                datetime.datetime.fromtimestamp( f['FSStepsGroup/FSStepsDataSet'][istart] ).strftime( "%Y-%m-%d %H:%M:%S" ),
+                datetime.datetime.fromtimestamp( f['FSStepsGroup/FSStepsDataSet'][istop] ).strftime( "%Y-%m-%d %H:%M:%S" )
+                )
         else:
-            print "%3d %5d %5d %12.2f %12.2f" % (
+            print "%3d %5d %5d %12.2f %12.2f %s %s" % (
                 timestep,
                 istart,
                 istop,
                 vol_read*_BYTES_TO_GIB,
-                vol_write*_BYTES_TO_GIB )
+                vol_write*_BYTES_TO_GIB,
+                datetime.datetime.fromtimestamp( f['FSStepsGroup/FSStepsDataSet'][istart] ).strftime( "%Y-%m-%d %H:%M:%S" ),
+                datetime.datetime.fromtimestamp( f['FSStepsGroup/FSStepsDataSet'][istop] ).strftime( "%Y-%m-%d %H:%M:%S" )
+                )
    
     return tot_read, tot_write
 
