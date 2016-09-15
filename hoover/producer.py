@@ -28,7 +28,7 @@ def produce( glob_str ):
 
     manifest = build_manifest( filenames )
     manifest_json = json.dumps(manifest)
-    manifest_cksum = hoover.checksum(StringIO.StringIO(manifest_json))
+    manifest_cksum = hoover.checksum( StringIO.StringIO(manifest_json) )
 
     conn = pika.BlockingConnection( pika.ConnectionParameters( 'localhost' ) )
     channel = conn.channel()

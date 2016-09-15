@@ -13,8 +13,9 @@ def sha1sum( f, blocksize=2**30 ):
 
 def checksum( f ):
     """Wrapper function for SHA1 sum"""
-    sha1sum( f )
+    return sha1sum( f )
 
 def checksum_file( filename ):
     with open(filename, 'rb') as f:
-        checksum( f )
+        cksum = checksum( f )
+    return cksum
