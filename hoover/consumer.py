@@ -25,7 +25,7 @@ def begin_consume( host, exchange, output_dir, port=pika.connection.ConnectionPa
         `output_dir` being in scope, so we define this callback within the
         consumer function
         """
-        if 'checksum' not in properties.headers:
+        if properties.headers is None or 'checksum' not in properties.headers:
             ### Messages without checksums at all are useless to us; discard
             print("No checksum provided in message header")
             print("Message header = [%s]" % json.dumps(properties.headers))
