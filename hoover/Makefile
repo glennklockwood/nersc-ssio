@@ -3,7 +3,7 @@
 CFLAGS=-I/opt/local/include -Wno-deprecated-declarations -DCONFIG_FILE=\"amqpcreds.conf\" -g
 LDFLAGS=-L/opt/local/lib -lrabbitmq -Bstatic
 
-sendfile-dmj: sendfile-dmj.o
+producer: producer.o
 
 clean:
-	rm dmj-sendfile *.o
+	rm producer *.o

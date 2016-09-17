@@ -40,10 +40,10 @@ struct config {
     char *username;
     char *password;
     char *exchange;
-    char *exchangeType;
+    char *exchange_type;
     char *queue;
     char *routingKey;
-    size_t maxTransmitSize;
+    size_t max_transmit_size;
     int useSSL;
 };
 
@@ -60,10 +60,10 @@ void printConfig(struct config *config, FILE *out) {
     fprintf(out, "username: %s\n", config->username);
     fprintf(out, "password: %s\n", config->password);
     fprintf(out, "exchange: %s\n", config->exchange);
-    fprintf(out, "exchangeType: %s\n", config->exchangeType);
+    fprintf(out, "exchangeType: %s\n", config->exchange_type);
     fprintf(out, "queue: %s\n", config->queue);
     fprintf(out, "routingKey: %s\n", config->routingKey);
-    fprintf(out, "maxTransmitSize: %lu\n", config->maxTransmitSize);
+    fprintf(out, "max_transmit_size: %lu\n", config->max_transmit_size);
     fprintf(out, "useSSL: %d\n", config->useSSL);
 }
 
@@ -127,13 +127,13 @@ struct config *readConfig() {
         } else if (strcmp(key, "exchange") == 0) {
             config->exchange = strdup(value);
         } else if (strcmp(key, "exchangeType") == 0) {
-            config->exchangeType = strdup(value);
+            config->exchange_type = strdup(value);
         } else if (strcmp(key, "queue") == 0) {
             config->queue = strdup(value);
         } else if (strcmp(key, "routingKey") == 0) {
             config->routingKey = strdup(value);
-        } else if (strcmp(key, "maxTransmitSize") == 0) {
-            config->maxTransmitSize = strtoul(value, NULL, 10);
+        } else if (strcmp(key, "max_transmit_size") == 0) {
+            config->max_transmit_size = strtoul(value, NULL, 10);
         } else if (strcmp(key, "useSSL") == 0) {
             config->useSSL= atoi(value);
         }
@@ -160,6 +160,8 @@ char *trim(char *string) {
 
 void die_on_amqp_error(amqp_rpc_reply_t x, char const *context)
 {
+    amqp_connection_close_t *conn_close_reply;
+    amqp_channel_close_t *chan_close_reply;
     switch (x.reply_type) {
     case AMQP_RESPONSE_NORMAL:
         return;
@@ -175,18 +177,18 @@ void die_on_amqp_error(amqp_rpc_reply_t x, char const *context)
     case AMQP_RESPONSE_SERVER_EXCEPTION:
         switch (x.reply.id) {
             case AMQP_CONNECTION_CLOSE_METHOD:
-                amqp_connection_close_t *m = (amqp_connection_close_t *) x.reply.decoded;
+                conn_close_reply = (amqp_connection_close_t *) x.reply.decoded;
                 fprintf(stderr, "%s: server connection error %d, message: %.*s\n",
                     context,
-                    m->reply_code,
-                    (int) m->reply_text.len, (char *) m->reply_text.bytes);
+                    conn_close_reply->reply_code,
+                    (int)conn_close_reply->reply_text.len, (char *)conn_close_reply->reply_text.bytes);
                 break;
             case AMQP_CHANNEL_CLOSE_METHOD:
-                amqp_channel_close_t *m = (amqp_channel_close_t *) x.reply.decoded;
+                chan_close_reply = (amqp_channel_close_t *) x.reply.decoded;
                 fprintf(stderr, "%s: server channel error %d, message: %.*s\n",
                     context,
-                    m->reply_code,
-                    (int) m->reply_text.len, (char *) m->reply_text.bytes);
+                    chan_close_reply->reply_code,
+                    (int)chan_close_reply->reply_text.len, (char *)chan_close_reply->reply_text.bytes);
                 break;
             default:
                 fprintf(stderr, "%s: unknown server error, method id 0x%08X\n", context, x.reply.id);
@@ -296,7 +298,7 @@ int main(int argc, char **argv) {
             conn,                            /* amqp_connection_state_t state */
             1,                                      /* amqp_channel_t channel */
             amqp_cstring_bytes(config->exchange),    /* amqp_bytes_t exchange */
-            amqp_cstring_bytes(config->exchangeType),    /* amqp_bytes_t type */
+            amqp_cstring_bytes(config->exchange_type),    /* amqp_bytes_t type */
             0,                                      /* amqp_boolean_t passive */
             0,                                      /* amqp_boolean_t durable */
             0,                                  /* amqp_boolean_t auto_delete */
