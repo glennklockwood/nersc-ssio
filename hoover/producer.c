@@ -42,12 +42,12 @@ struct config {
     char *exchange;
     char *exchange_type;
     char *queue;
-    char *routingKey;
+    char *routing_key;
     size_t max_transmit_size;
-    int useSSL;
+    int use_ssl;
 };
 
-void printConfig(struct config *config, FILE *out) {
+void save_config(struct config *config, FILE *out) {
     if (config == NULL || out == NULL) return;
 
     int i;
@@ -60,14 +60,14 @@ void printConfig(struct config *config, FILE *out) {
     fprintf(out, "username: %s\n", config->username);
     fprintf(out, "password: %s\n", config->password);
     fprintf(out, "exchange: %s\n", config->exchange);
-    fprintf(out, "exchangeType: %s\n", config->exchange_type);
+    fprintf(out, "exchange_type: %s\n", config->exchange_type);
     fprintf(out, "queue: %s\n", config->queue);
-    fprintf(out, "routingKey: %s\n", config->routingKey);
+    fprintf(out, "routing_key: %s\n", config->routing_key);
     fprintf(out, "max_transmit_size: %lu\n", config->max_transmit_size);
-    fprintf(out, "useSSL: %d\n", config->useSSL);
+    fprintf(out, "use_ssl: %d\n", config->use_ssl);
 }
 
-struct config *readConfig() {
+struct config *read_config() {
     FILE *fp = fopen(CONFIG_FILE, "r");
     if (fp == NULL) return NULL;
 
@@ -76,15 +76,15 @@ struct config *readConfig() {
 
     memset(config, 0, sizeof(struct config));
     
-    char *linePtr = NULL;
-    size_t linePtr_sz = 0;
+    char *p = NULL;
+    size_t ps = 0;
 
     for ( ; !feof(fp) && !ferror(fp); ) {
-        size_t nread = getline(&linePtr, &linePtr_sz, fp);
+        size_t nread = getline(&p, &ps, fp);
         if (nread == 0 || feof(fp) || ferror(fp)) {
             break;
         }
-        char *key = linePtr;
+        char *key = p;
         char *ptr = strchr(key, '=');
         if (ptr == NULL) continue;
         *ptr = 0;
@@ -126,19 +126,19 @@ struct config *readConfig() {
             config->password = strdup(value);
         } else if (strcmp(key, "exchange") == 0) {
             config->exchange = strdup(value);
-        } else if (strcmp(key, "exchangeType") == 0) {
+        } else if (strcmp(key, "exchangeType") == 0 || strcmp(key, "exchange_type") == 0) {
             config->exchange_type = strdup(value);
         } else if (strcmp(key, "queue") == 0) {
             config->queue = strdup(value);
-        } else if (strcmp(key, "routingKey") == 0) {
-            config->routingKey = strdup(value);
-        } else if (strcmp(key, "max_transmit_size") == 0) {
+        } else if (strcmp(key, "routingKey") == 0 || strcmp(key, "routing_key") == 0) {
+            config->routing_key = strdup(value);
+        } else if (strcmp(key, "maxTransmitSize") == 0 || strcmp(key, "max_transmit_size") == 0) {
             config->max_transmit_size = strtoul(value, NULL, 10);
-        } else if (strcmp(key, "useSSL") == 0) {
-            config->useSSL= atoi(value);
+        } else if (strcmp(key, "use_ssl") == 0) {
+            config->use_ssl = atoi(value);
         }
     }
-    free(linePtr);
+    free(p);
     return config;
 }
 
@@ -228,7 +228,7 @@ int main(int argc, char **argv) {
     amqp_rpc_reply_t reply;
     int status;
 
-    struct config *config = readConfig();
+    struct config *config = read_config();
     char *message = NULL;
     char *hostname;
 
@@ -240,14 +240,14 @@ int main(int argc, char **argv) {
     }
     else {
         fprintf( stderr, "Printing config\n" );
-        printConfig( config, stdout );
+        save_config( config, stdout );
     }
 
     for ( connected = 0, hostname = select_server(config); hostname != NULL ; hostname = select_server(config) ) {
         printf( "Attempting to connect to %s:%d\n", hostname, config->port );
         conn = amqp_new_connection();
 
-        if ( config->useSSL )
+        if ( config->use_ssl )
             socket = amqp_ssl_socket_new(conn);
         else
             socket = amqp_tcp_socket_new(conn);
@@ -257,7 +257,7 @@ int main(int argc, char **argv) {
             exit(1);
         }
 
-        if ( config->useSSL ) {
+        if ( config->use_ssl ) {
             amqp_ssl_socket_set_verify_peer(socket, 0);
             amqp_ssl_socket_set_verify_hostname(socket, 0);
         }
@@ -321,7 +321,7 @@ int main(int argc, char **argv) {
                 conn,                                   /* amqp_connection_state_t state */
                 1,                                      /* amqp_channel_t channel */
                 amqp_cstring_bytes(config->exchange),   /* amqp_bytes_t exchange */
-                amqp_cstring_bytes(config->routingKey), /* amqp_bytes_t routing_key */
+                amqp_cstring_bytes(config->routing_key), /* amqp_bytes_t routing_key */
                 0,                                      /* amqp_boolean_t mandatory */
                 0,                                      /* amqp_boolean_t immediate */
                 &props,                                 /* amqp_basic_properties_t properties */
