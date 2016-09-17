@@ -21,6 +21,9 @@
 #include <amqp_tcp_socket.h>
 #include <amqp_framing.h>
 
+/* TODO: offer alternate options for systems not supporting SHA */
+#include <openssl/sha.h>
+
 #ifndef CONFIG_FILE
 #define CONFIG_FILE "/etc/opt/nersc/slurmd_log_rotate_mq.conf"
 #endif
@@ -29,8 +32,9 @@
 #define MAX_SERVERS 256
 #endif
 
-char *trim(char *string);
-
+/*
+ * Global structures
+ */
 struct config {
     char *servers[MAX_SERVERS];
     int max_hosts;
@@ -46,6 +50,23 @@ struct config {
     size_t max_transmit_size;
     int use_ssl;
 };
+
+struct hoover_header {
+    char * filename;
+    size_t size;
+    unsigned char hash[SHA_DIGEST_LENGTH];
+};
+
+/*
+ *  Function prototypes
+ */
+void send_message( amqp_connection_state_t conn, amqp_channel_t channel,
+    char *body, char *exchange, char *routing_key, struct hoover_header header );
+void save_config(struct config *config, FILE *out);
+void die_on_amqp_error(amqp_rpc_reply_t x, char const *context);
+char *trim(char *string);
+char *select_server(struct config *config);
+struct config *read_config();
 
 void save_config(struct config *config, FILE *out) {
     if (config == NULL || out == NULL) return;
@@ -159,8 +180,7 @@ char *trim(char *string) {
 }
 
 
-void die_on_amqp_error(amqp_rpc_reply_t x, char const *context)
-{
+void die_on_amqp_error(amqp_rpc_reply_t x, char const *context) {
     amqp_connection_close_t *conn_close_reply;
     amqp_channel_close_t *chan_close_reply;
     switch (x.reply_type) {
@@ -229,13 +249,15 @@ int main(int argc, char **argv) {
     amqp_rpc_reply_t reply;
     int status;
 
-    struct config *config = read_config();
+    struct config *config;
     char *message = NULL;
     char *hostname;
 
     int connected;
 
-    if ( !config ) {
+    struct hoover_header header = { NULL, 0, '\0' };
+
+    if ( !(config = read_config()) ) {
         fprintf( stderr, "NULL config\n" );
         return 1;
     }
@@ -287,12 +309,10 @@ int main(int argc, char **argv) {
             AMQP_SASL_METHOD_PLAIN,      /* amqp_sasl_method_enum sasl_method */
             config->username,
             config->password);
-
     die_on_amqp_error(reply, "login");
 
     amqp_channel_open(conn, 1);
-    reply = amqp_get_rpc_reply(conn);
-    die_on_amqp_error(reply, "channel open");
+    die_on_amqp_error(amqp_get_rpc_reply(conn), "channel open");
 
     amqp_exchange_declare(
             conn,                            /* amqp_connection_state_t state */
@@ -305,39 +325,46 @@ int main(int argc, char **argv) {
             0,                                     /* amqp_boolean_t internal */
             amqp_empty_table                        /* amqp_table_t arguments */
     );
-    reply = amqp_get_rpc_reply(conn);
-    die_on_amqp_error(reply, "exchange declare");
+    die_on_amqp_error(amqp_get_rpc_reply(conn), "exchange declare");
 
+    /* build headers here */
     message = "hello world";
-    if (message != NULL) {
-        printf( "Sending message\n" );
-        amqp_basic_properties_t props;
+        send_message( 
+            conn, 
+            1,
+            message,
+            config->exchange,
+            config->routing_key,
+            header );
 
-        /* TODO: figure out what these flags mean */
-        props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG; 
-        props.delivery_mode = 2; /* 1 or 2? */
-
-        amqp_basic_publish(
-                conn,                                   /* amqp_connection_state_t state */
-                1,                                      /* amqp_channel_t channel */
-                amqp_cstring_bytes(config->exchange),   /* amqp_bytes_t exchange */
-                amqp_cstring_bytes(config->routing_key), /* amqp_bytes_t routing_key */
-                0,                                      /* amqp_boolean_t mandatory */
-                0,                                      /* amqp_boolean_t immediate */
-                &props,                                 /* amqp_basic_properties_t properties */
-                amqp_cstring_bytes(message)             /* amqp_bytes_t body */
-        );
-        reply = amqp_get_rpc_reply(conn);
-        die_on_amqp_error(reply, "publish message");
-    }
-
-    reply = amqp_channel_close(conn, 1, AMQP_REPLY_SUCCESS);
-    die_on_amqp_error(reply, "channel close");
-
-    reply = amqp_connection_close(conn, AMQP_REPLY_SUCCESS);
-    die_on_amqp_error(reply, "connection close");
+    die_on_amqp_error(amqp_channel_close(conn, 1, AMQP_REPLY_SUCCESS), "channel close");
+    die_on_amqp_error(amqp_connection_close(conn, AMQP_REPLY_SUCCESS), "connection close");
 
     status = amqp_destroy_connection(conn);
 
     return 0;
+}
+
+void send_message( amqp_connection_state_t conn, amqp_channel_t channel, char *body, char *exchange, char *routing_key, struct hoover_header header ) {
+    amqp_rpc_reply_t reply;
+    amqp_basic_properties_t props;
+
+    /* TODO: figure out what these flags mean */
+    props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG; 
+    props.delivery_mode = 2; /* 1 or 2? */
+
+    printf( "Sending message\n" );
+    amqp_basic_publish(
+        conn,                                   /* amqp_connection_state_t state */
+        1,                                      /* amqp_channel_t channel */
+        amqp_cstring_bytes(exchange),           /* amqp_bytes_t exchange */
+        amqp_cstring_bytes(routing_key),        /* amqp_bytes_t routing_key */
+        0,                                      /* amqp_boolean_t mandatory */
+        0,                                      /* amqp_boolean_t immediate */
+        &props,                                 /* amqp_basic_properties_t properties */
+        amqp_cstring_bytes(body)                /* amqp_bytes_t body */
+    );
+    reply = amqp_get_rpc_reply(conn);
+    die_on_amqp_error(reply, "publish message");
+    return;
 }
