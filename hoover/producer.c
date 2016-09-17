@@ -79,7 +79,7 @@ struct config *read_config() {
     char *p = NULL;
     size_t ps = 0;
 
-    for ( ; !feof(fp) && !ferror(fp); ) {
+    while (!feof(fp) && !ferror(fp)) {
         size_t nread = getline(&p, &ps, fp);
         if (nread == 0 || feof(fp) || ferror(fp)) {
             break;
@@ -143,15 +143,16 @@ struct config *read_config() {
 }
 
 char *trim(char *string) {
-    if (string == NULL || strlen(string) == 0) {
+    if (string == NULL || strlen(string) == 0)
         return string;
-    }
 
     char *left = string;
     char *right = string + strlen(string) - 1;
 
-    for ( ; left && *left && isspace(*left); left++ ) { }
-    for ( ; right > left && right && *right && isspace(*right); right--) { }
+    while (left && *left && isspace(*left))
+        left++;
+    while (right > left && right && *right && isspace(*right))
+        right--;
     right++;
     *right = '\0';
     return left;
@@ -239,7 +240,6 @@ int main(int argc, char **argv) {
         return 1;
     }
     else {
-        fprintf( stderr, "Printing config\n" );
         save_config( config, stdout );
     }
 
