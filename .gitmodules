@@ -1,3 +1,0 @@
-[submodule "hoover/amqptools"]
-	path = hoover/amqptools
-	url = git@github.com:glennklockwood/amqptools
