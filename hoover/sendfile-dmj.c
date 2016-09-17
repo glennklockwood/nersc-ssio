@@ -25,8 +25,16 @@
 #define CONFIG_FILE "/etc/opt/nersc/slurmd_log_rotate_mq.conf"
 #endif
 
+#ifndef MAX_SERVERS
+#define MAX_SERVERS 256
+#endif
+
+char *trim(char *string);
+
 struct config {
-    char **servers;
+    char *servers[MAX_SERVERS];
+    int max_hosts;
+    int remaining_hosts;
     int port;
     char *vhost;
     char *username;
@@ -36,17 +44,16 @@ struct config {
     char *queue;
     char *routingKey;
     size_t maxTransmitSize;
-
     int useSSL;
 };
 
 void printConfig(struct config *config, FILE *out) {
     if (config == NULL || out == NULL) return;
 
-    char **servers = config->servers;
+    int i;
     fprintf(out, "servers: ");
-    for ( ; servers && *servers; servers++) {
-        fprintf(out, "%s%s", (servers == config->servers ? "" : "|"), *servers);
+    for ( i = 0 ; i < config->max_hosts; i++) {
+        fprintf(out, "%s%s", (i == 0 ? "" : ", "), config->servers[i] );
     }
     fprintf(out, "\nport: %d\n", config->port);
     fprintf(out, "vhost: %s\n", config->vhost);
@@ -60,13 +67,13 @@ void printConfig(struct config *config, FILE *out) {
     fprintf(out, "useSSL: %d\n", config->useSSL);
 }
 
-char *trim(char *string);
-
 struct config *readConfig() {
     FILE *fp = fopen(CONFIG_FILE, "r");
     if (fp == NULL) return NULL;
 
     struct config *config = (struct config *) malloc(sizeof(struct config));
+    if ( !config ) return NULL;
+
     memset(config, 0, sizeof(struct config));
     
     char *linePtr = NULL;
@@ -94,12 +101,21 @@ struct config *readConfig() {
 
             while ((t_value = strtok_r(search, ",", &save_ptr)) != NULL) {
                 search = NULL;
-                config->servers = (char **) realloc(config->servers, sizeof(char *) * (server_cnt + 2));
                 t_value = trim(t_value);
                 if (t_value == NULL) continue;
-                config->servers[server_cnt] = strdup(t_value);
-                server_cnt++;
+
+                if ( server_cnt < MAX_SERVERS ) {
+                    config->servers[server_cnt] = strdup(t_value);
+                    printf( "Found server %s\n", config->servers[server_cnt] );
+                    server_cnt++;
+                }
+                else {
+                    fprintf( stderr, "too many servers in config file; truncating at %d\n", MAX_SERVERS );
+                    break;
+                }
             }
+            config->max_hosts = server_cnt;
+            config->remaining_hosts = server_cnt;
         } else if (strcmp(key, "port") == 0) {
             config->port = atoi(value);
         } else if (strcmp(key, "vhost") == 0) {
@@ -137,70 +153,67 @@ char *trim(char *string) {
     for ( ; left && *left && isspace(*left); left++ ) { }
     for ( ; right > left && right && *right && isspace(*right); right--) { }
     right++;
-    *right = 0;
+    *right = '\0';
     return left;
 }
 
 
 void die_on_amqp_error(amqp_rpc_reply_t x, char const *context)
 {
-  switch (x.reply_type) {
-  case AMQP_RESPONSE_NORMAL:
-    return;
+    switch (x.reply_type) {
+    case AMQP_RESPONSE_NORMAL:
+        return;
 
-  case AMQP_RESPONSE_NONE:
-    fprintf(stderr, "%s: missing RPC reply type!\n", context);
-    break;
+    case AMQP_RESPONSE_NONE:
+        fprintf(stderr, "%s: missing RPC reply type!\n", context);
+        break;
 
-  case AMQP_RESPONSE_LIBRARY_EXCEPTION:
-    fprintf(stderr, "%s: %s\n", context, amqp_error_string2(x.library_error));
-    break;
+    case AMQP_RESPONSE_LIBRARY_EXCEPTION:
+        fprintf(stderr, "%s: %s\n", context, amqp_error_string2(x.library_error));
+        break;
 
-  case AMQP_RESPONSE_SERVER_EXCEPTION:
-    switch (x.reply.id) {
-    case AMQP_CONNECTION_CLOSE_METHOD: {
-      amqp_connection_close_t *m = (amqp_connection_close_t *) x.reply.decoded;
-      fprintf(stderr, "%s: server connection error %d, message: %.*s\n",
-              context,
-              m->reply_code,
-              (int) m->reply_text.len, (char *) m->reply_text.bytes);
-      break;
+    case AMQP_RESPONSE_SERVER_EXCEPTION:
+        switch (x.reply.id) {
+            case AMQP_CONNECTION_CLOSE_METHOD:
+                amqp_connection_close_t *m = (amqp_connection_close_t *) x.reply.decoded;
+                fprintf(stderr, "%s: server connection error %d, message: %.*s\n",
+                    context,
+                    m->reply_code,
+                    (int) m->reply_text.len, (char *) m->reply_text.bytes);
+                break;
+            case AMQP_CHANNEL_CLOSE_METHOD:
+                amqp_channel_close_t *m = (amqp_channel_close_t *) x.reply.decoded;
+                fprintf(stderr, "%s: server channel error %d, message: %.*s\n",
+                    context,
+                    m->reply_code,
+                    (int) m->reply_text.len, (char *) m->reply_text.bytes);
+                break;
+            default:
+                fprintf(stderr, "%s: unknown server error, method id 0x%08X\n", context, x.reply.id);
+                break;
+        }
+        break;
     }
-    case AMQP_CHANNEL_CLOSE_METHOD: {
-      amqp_channel_close_t *m = (amqp_channel_close_t *) x.reply.decoded;
-      fprintf(stderr, "%s: server channel error %d, message: %.*s\n",
-              context,
-              m->reply_code,
-              (int) m->reply_text.len, (char *) m->reply_text.bytes);
-      break;
-    }
-    default:
-      fprintf(stderr, "%s: unknown server error, method id 0x%08X\n", context, x.reply.id);
-      break;
-    }
-    break;
-  }
-
-  exit(1);
+    exit(1);
 }
 
+/*
+ *  randomly select a server from the list of servers, then pop it off the list
+ */
 char *select_server(struct config *config) {
-    size_t n_servers = 0;
-    char **ptr = config->servers;
-    for ( ; ptr && *ptr; ptr++) {
-        n_servers++;
-    }
+    if (config->remaining_hosts == 0 || config->max_hosts == 0) return NULL;
 
-    if (n_servers == 0) return NULL;
+    size_t idx;
+    char *server;
 
-    size_t idx = rand() % n_servers;
-    char *server = config->servers[idx];
+    idx = rand() % config->max_hosts;
+    server = config->servers[idx];
 
     /* swap last element with selected element */
-    config->servers[idx] = config->servers[n_servers - 1];
+    config->servers[idx] = config->servers[config->remaining_hosts - 1];
 
-    /* nullify final element (now the selected one) to shorten the list */
-    config->servers[n_servers - 1] = NULL;
+    /* shorten the candidate list so we don't try the same server twice */
+    config->remaining_hosts--;
     return server;
 }
 
@@ -215,12 +228,21 @@ int main(int argc, char **argv) {
 
     struct config *config = readConfig();
     char *message = NULL;
-    char *server = select_server(config);
+    char *hostname;
 
-    int connected = 0;
+    int connected;
 
-    for ( ; server != NULL ; server = select_server(config) ) {
-        printf( "Checking out %s:%d\n", server, config->port );
+    if ( !config ) {
+        fprintf( stderr, "NULL config\n" );
+        return 1;
+    }
+    else {
+        fprintf( stderr, "Printing config\n" );
+        printConfig( config, stdout );
+    }
+
+    for ( connected = 0, hostname = select_server(config); hostname != NULL ; hostname = select_server(config) ) {
+        printf( "Attempting to connect to %s:%d\n", hostname, config->port );
         conn = amqp_new_connection();
 
         if ( config->useSSL )
@@ -238,12 +260,15 @@ int main(int argc, char **argv) {
             amqp_ssl_socket_set_verify_hostname(socket, 0);
         }
 
-        status = amqp_socket_open(socket, server, config->port);
+        status = amqp_socket_open(socket, hostname, config->port);
+
         if (status != 0) {
-            continue;
+            fprintf( stderr, "Failed to connect to %s:%d; moving on...\n", hostname, config->port );
         }
-        connected = 1;
-        break;
+        else {
+            connected = 1;
+            break;
+        }
     }
 
     if (!connected) {
@@ -252,9 +277,15 @@ int main(int argc, char **argv) {
     }
 
     reply = amqp_login(
-            conn, config->vhost, 0, 131072, 0, AMQP_SASL_METHOD_PLAIN,
-            config->username, config->password
-    );
+            conn,                            /* amqp_connection_state_t state */
+            config->vhost,                               /* char const *vhost */
+            0,                                             /* int channel_max */
+            131072,                                          /* int frame_max */
+            0,                                               /* int heartbeat */
+            AMQP_SASL_METHOD_PLAIN,      /* amqp_sasl_method_enum sasl_method */
+            config->username,
+            config->password);
+
     die_on_amqp_error(reply, "login");
 
     amqp_channel_open(conn, 1);
@@ -262,29 +293,27 @@ int main(int argc, char **argv) {
     die_on_amqp_error(reply, "channel open");
 
     amqp_exchange_declare(
-            conn,
-            1,
-            amqp_cstring_bytes(config->exchange),
-            amqp_cstring_bytes(config->exchangeType),
-            0,
-            1,
-            0,
-            0,
-            amqp_empty_table
+            conn,                            /* amqp_connection_state_t state */
+            1,                                      /* amqp_channel_t channel */
+            amqp_cstring_bytes(config->exchange),    /* amqp_bytes_t exchange */
+            amqp_cstring_bytes(config->exchangeType),    /* amqp_bytes_t type */
+            0,                                      /* amqp_boolean_t passive */
+            0,                                      /* amqp_boolean_t durable */
+            0,                                  /* amqp_boolean_t auto_delete */
+            0,                                     /* amqp_boolean_t internal */
+            amqp_empty_table                        /* amqp_table_t arguments */
     );
     reply = amqp_get_rpc_reply(conn);
     die_on_amqp_error(reply, "exchange declare");
 
     message = "hello world";
     if (message != NULL) {
-        amqp_bytes_t amqp_message;
-        amqp_basic_properties_t message_props;
+        printf( "Sending message\n" );
+        amqp_basic_properties_t props;
 
-        amqp_message.len = strlen(message);
-        amqp_message.bytes = message;
         /* TODO: figure out what these flags mean */
-        message_props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG; 
-        message_props.delivery_mode = 2;/* 1 or 2? */
+        props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG; 
+        props.delivery_mode = 2; /* 1 or 2? */
 
         amqp_basic_publish(
                 conn,                                   /* amqp_connection_state_t state */
@@ -293,8 +322,8 @@ int main(int argc, char **argv) {
                 amqp_cstring_bytes(config->routingKey), /* amqp_bytes_t routing_key */
                 0,                                      /* amqp_boolean_t mandatory */
                 0,                                      /* amqp_boolean_t immediate */
-                NULL,                                   /* amqp_basic_properties_t properties */
-                amqp_message                            /* amqp_bytes_t body */
+                &props,                                 /* amqp_basic_properties_t properties */
+                amqp_cstring_bytes(message)             /* amqp_bytes_t body */
         );
         reply = amqp_get_rpc_reply(conn);
         die_on_amqp_error(reply, "publish message");
@@ -302,6 +331,7 @@ int main(int argc, char **argv) {
 
     reply = amqp_channel_close(conn, 1, AMQP_REPLY_SUCCESS);
     die_on_amqp_error(reply, "channel close");
+
     reply = amqp_connection_close(conn, AMQP_REPLY_SUCCESS);
     die_on_amqp_error(reply, "connection close");
 
