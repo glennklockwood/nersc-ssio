@@ -21,6 +21,11 @@
 #include <amqp_tcp_socket.h>
 #include <amqp_framing.h>
 
+#ifdef __APPLE__
+#include <sys/syslimits.h>
+#define MAX_PATH PATH_MAX
+#endif
+
 /* TODO: offer alternate options for systems not supporting SHA */
 #include <openssl/sha.h>
 
@@ -31,6 +36,8 @@
 #ifndef MAX_SERVERS
 #define MAX_SERVERS 256
 #endif
+
+#define SHA_DIGEST_LENGTH_HEX SHA_DIGEST_LENGTH * 2 + 1
 
 /*
  * Global structures
@@ -52,22 +59,28 @@ struct config {
 };
 
 struct hoover_header {
-    char * filename;
+    char filename[MAX_PATH];
     size_t size;
-    unsigned char hash[SHA_DIGEST_LENGTH];
+    unsigned char hash[SHA_DIGEST_LENGTH_HEX];
 };
 
 /*
  *  Function prototypes
  */
 void send_message( amqp_connection_state_t conn, amqp_channel_t channel,
-    char *body, char *exchange, char *routing_key, struct hoover_header header );
+    char *body, char *exchange, char *routing_key, struct hoover_header *header );
 void save_config(struct config *config, FILE *out);
 void die_on_amqp_error(amqp_rpc_reply_t x, char const *context);
 char *trim(char *string);
 char *select_server(struct config *config);
 struct config *read_config();
+unsigned char *sha1_file( FILE *fp, size_t buf_size );
+unsigned char *sha1_blob( unsigned const char *blob, size_t len );
+struct hoover_header *build_header( char *filename );
 
+/*
+ * Command-line and RabbitMQ configuration parameters
+ */
 void save_config(struct config *config, FILE *out) {
     if (config == NULL || out == NULL) return;
 
@@ -163,6 +176,9 @@ struct config *read_config() {
     return config;
 }
 
+/*
+ * Strip leading/trailing whitespace from a string
+ */
 char *trim(char *string) {
     if (string == NULL || strlen(string) == 0)
         return string;
@@ -180,6 +196,10 @@ char *trim(char *string) {
 }
 
 
+/*
+ * Check return of a rabbitmq-c call and throw an error + clean up if it is a
+ * failure
+ */
 void die_on_amqp_error(amqp_rpc_reply_t x, char const *context) {
     amqp_connection_close_t *conn_close_reply;
     amqp_channel_close_t *chan_close_reply;
@@ -240,6 +260,66 @@ char *select_server(struct config *config) {
     return server;
 }
 
+
+/* sha1_blob: Turn a byte blob into a hexified sha1 sum.  Not thread safe.
+ *
+ * input: blob - a byte array
+ *        len - length of that byte array
+ * output: SHA1 hash with each byte expressed as a hex value
+ *
+ * Note that hashing strings should NOT include the terminal NULL
+ * byte since that is a C construct.  Also be careful when using
+ * strlen() vs. sizeof(); sizeof() includes padding bytes if blob
+ * is not aligned to 8 bytes.
+ */
+unsigned char *sha1_blob( unsigned const char *blob, size_t len ) {
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    static unsigned char hex_hash[SHA_DIGEST_LENGTH_HEX];
+    int i;
+
+    SHA1(blob, len, hash);
+
+    /* note that hash does not terminate in \0 */
+    for ( i = 0; i < SHA_DIGEST_LENGTH; i++ )
+        sprintf( (char*)&(hex_hash[2*i]), "%02x", hash[i] );
+
+    return hex_hash;
+}
+
+/*
+ * Calculate SHA1 hash of all data located behind a file pointer
+ */
+unsigned char *sha1_file( FILE *fp, size_t buf_size ) {
+    SHA_CTX ctx;
+    char *buf;
+    size_t bytes_read;
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    static unsigned char hex_hash[SHA_DIGEST_LENGTH_HEX];
+    int i;
+
+    buf = malloc( buf_size );
+    if ( !buf ) return NULL;
+
+    SHA1_Init(&ctx);
+    do {
+        bytes_read = fread(buf, 1, buf_size, fp);
+        SHA1_Update( &ctx, buf, bytes_read );
+    } while ( bytes_read != 0 );
+
+    free( buf );
+
+    SHA1_Final(hash, &ctx);
+
+    /* note that hash does not terminate in \0 */
+    for ( i = 0; i < SHA_DIGEST_LENGTH; i++ )
+        sprintf( (char*)&(hex_hash[2*i]), "%02x", hash[i] );
+
+    return hex_hash;
+}
+
+
+
+
 int main(int argc, char **argv) {
 
     srand(time(NULL) ^ getpid());
@@ -250,12 +330,11 @@ int main(int argc, char **argv) {
     int status;
 
     struct config *config;
+    struct hoover_header *header;
     char *message = NULL;
     char *hostname;
 
     int connected;
-
-    struct hoover_header header = { NULL, 0, '\0' };
 
     if ( !(config = read_config()) ) {
         fprintf( stderr, "NULL config\n" );
@@ -263,6 +342,11 @@ int main(int argc, char **argv) {
     }
     else {
         save_config( config, stdout );
+    }
+
+    if ( argc < 2 ) {
+        fprintf( stderr, "Syntax: %s <file name>\n", argv[0] );
+        return 1;
     }
 
     for ( connected = 0, hostname = select_server(config); hostname != NULL ; hostname = select_server(config) ) {
@@ -329,13 +413,22 @@ int main(int argc, char **argv) {
 
     /* build headers here */
     message = "hello world";
-        send_message( 
-            conn, 
-            1,
-            message,
-            config->exchange,
-            config->routing_key,
-            header );
+    header = build_header( argv[1] );
+    if ( !header ) {
+        fprintf( stderr, "got null header\n" );
+        return 1;
+    }
+
+    /* send the message */
+    send_message( 
+        conn, 
+        1,
+        message,
+        config->exchange,
+        config->routing_key,
+        header );
+
+    free(header);
 
     die_on_amqp_error(amqp_channel_close(conn, 1, AMQP_REPLY_SUCCESS), "channel close");
     die_on_amqp_error(amqp_connection_close(conn, AMQP_REPLY_SUCCESS), "connection close");
@@ -345,9 +438,12 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-void send_message( amqp_connection_state_t conn, amqp_channel_t channel, char *body, char *exchange, char *routing_key, struct hoover_header header ) {
+void send_message( amqp_connection_state_t conn, amqp_channel_t channel,
+                   char *body, char *exchange, char *routing_key,
+                   struct hoover_header *header ) {
     amqp_rpc_reply_t reply;
     amqp_basic_properties_t props;
+    memset( &props, 0, sizeof(props) );
 
     /* TODO: figure out what these flags mean */
     props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG; 
@@ -367,4 +463,51 @@ void send_message( amqp_connection_state_t conn, amqp_channel_t channel, char *b
     reply = amqp_get_rpc_reply(conn);
     die_on_amqp_error(reply, "publish message");
     return;
+}
+
+/*
+ * input: list of file name strings
+ * output: list of hoover headers...or just the json blob?  python version
+ *         returns a dict which gets serialized later
+ *
+struct hoover_header **build_manifest( char **filenames ) {
+}
+ */
+
+struct hoover_header *build_header( char *filename ) {
+    struct hoover_header *header;
+    unsigned char *hex_hash;
+    struct stat st;
+    FILE *fp;
+
+    header = malloc(sizeof(struct hoover_header));
+    if ( !header )
+        return NULL;
+
+    if ( !(fp = fopen( filename, "r" )) ) {
+        free(header);
+        return NULL;
+    }
+
+    if ( fstat(fileno(fp), &st) != 0 ) {
+        free(header);
+        fclose(fp);
+        return NULL;
+    }
+
+    fclose(fp);
+
+    hex_hash = sha1_file( fp, 32*1024 /* 32 kib is arbitrary */ );
+
+    printf( "hex_hash is [%s]\n", hex_hash );
+
+    strncpy( header->filename, filename, MAX_PATH );
+
+    header->size = st.st_size;
+
+    strncpy( (char*)header->hash, (const char*)hex_hash, SHA_DIGEST_LENGTH_HEX );
+
+    printf("file=[%s],size=[%ld],sha=[%s]\n", header->filename, header->size, header->hash );
+
+    return header;
 }
