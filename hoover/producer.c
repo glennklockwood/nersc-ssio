@@ -438,16 +438,59 @@ int main(int argc, char **argv) {
     return 0;
 }
 
+/*
+ * input: hoover_header, amqp_basic_properties_t
+ * output: none
+ * side-effects: transfer the header data from hoover_header to
+ *               amqp_basic_properties_t
+ */
+int set_hoover_header( struct hoover_header *header, amqp_basic_properties_t *props ) {
+
+
+    return 0;
+}
+
+void destroy_amqp_table( amqp_table_t *table ) {
+    int i;
+    for ( i = 0; i < table->num_entries; i++ ) {
+        free(&(table->entries[i]));
+    }
+    free(table);
+    return;
+}
+
 void send_message( amqp_connection_state_t conn, amqp_channel_t channel,
                    char *body, char *exchange, char *routing_key,
                    struct hoover_header *header ) {
     amqp_rpc_reply_t reply;
     amqp_basic_properties_t props;
+    amqp_table_t table;
+    amqp_table_entry_t entries[3];
+
     memset( &props, 0, sizeof(props) );
 
     /* TODO: figure out what these flags mean */
-    props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG; 
+    props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG | AMQP_BASIC_HEADERS_FLAG;
     props.delivery_mode = 2; /* 1 or 2? */
+
+    /*
+     * Set headers
+     */
+    entries[0].key = amqp_cstring_bytes("filename");
+    entries[0].value.kind = AMQP_FIELD_KIND_UTF8;
+    entries[0].value.value.bytes = amqp_cstring_bytes(header->filename);
+
+    entries[1].key = amqp_cstring_bytes("size");
+    entries[1].value.kind = AMQP_FIELD_KIND_I64;
+    entries[1].value.value.i64 = header->size;
+
+    entries[2].key = amqp_cstring_bytes("checksum");
+    entries[2].value.kind = AMQP_FIELD_KIND_UTF8;
+    entries[2].value.value.bytes = amqp_cstring_bytes((char*)header->hash);
+
+    table.num_entries = 3;
+    table.entries = entries;
+    props.headers = table;
 
     printf( "Sending message\n" );
     amqp_basic_publish(
