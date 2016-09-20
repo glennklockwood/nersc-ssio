@@ -438,17 +438,6 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-/*
- * input: hoover_header, amqp_basic_properties_t
- * output: none
- * side-effects: transfer the header data from hoover_header to
- *               amqp_basic_properties_t
- */
-int set_hoover_header( struct hoover_header *header, amqp_basic_properties_t *props ) {
-
-
-    return 0;
-}
 
 void destroy_amqp_table( amqp_table_t *table ) {
     int i;
@@ -459,23 +448,23 @@ void destroy_amqp_table( amqp_table_t *table ) {
     return;
 }
 
-void send_message( amqp_connection_state_t conn, amqp_channel_t channel,
-                   char *body, char *exchange, char *routing_key,
-                   struct hoover_header *header ) {
-    amqp_rpc_reply_t reply;
-    amqp_basic_properties_t props;
-    amqp_table_t table;
-    amqp_table_entry_t entries[3];
+/* create_amqp_header_table - convert a hoover_header struct into an AMQP table
+ * to be attached to a message
+ */
+amqp_table_t *create_amqp_header_table( struct hoover_header *header ) {
+    amqp_table_t *table;
+    amqp_table_entry_t *entries;
 
-    memset( &props, 0, sizeof(props) );
+    if ( !(table = malloc(sizeof(*table))) )
+        return NULL;
+    if ( !(entries = malloc(3 * sizeof(*entries))) ) {
+        free(table);
+        return NULL;
+    }
 
-    /* TODO: figure out what these flags mean */
-    props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG | AMQP_BASIC_HEADERS_FLAG;
-    props.delivery_mode = 2; /* 1 or 2? */
+    table->num_entries = 3;
 
-    /*
-     * Set headers
-     */
+    /* Set headers */
     entries[0].key = amqp_cstring_bytes("filename");
     entries[0].value.kind = AMQP_FIELD_KIND_UTF8;
     entries[0].value.value.bytes = amqp_cstring_bytes(header->filename);
@@ -488,10 +477,30 @@ void send_message( amqp_connection_state_t conn, amqp_channel_t channel,
     entries[2].value.kind = AMQP_FIELD_KIND_UTF8;
     entries[2].value.value.bytes = amqp_cstring_bytes((char*)header->hash);
 
-    table.num_entries = 3;
-    table.entries = entries;
-    props.headers = table;
+    table->entries = entries;
 
+    return table;
+}
+
+/* convert a bunch of runtime structures into an AMQP message and send it  */
+void send_message( amqp_connection_state_t conn, amqp_channel_t channel,
+                   char *body, char *exchange, char *routing_key,
+                   struct hoover_header *header ) {
+    amqp_rpc_reply_t reply;
+    amqp_basic_properties_t props;
+    amqp_table_t *table;
+
+    memset( &props, 0, sizeof(props) );
+
+    /* create the amqp_table that contains the header metadata */
+    table = create_amqp_header_table( header );
+
+    /* TODO: figure out what these flags mean */
+    props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG | AMQP_BASIC_HEADERS_FLAG;
+    props.delivery_mode = 2; /* 1 or 2? */
+    props.headers = *table;
+
+    /* Send the actual AMQP message */
     printf( "Sending message\n" );
     amqp_basic_publish(
         conn,                                   /* amqp_connection_state_t state */
@@ -503,8 +512,14 @@ void send_message( amqp_connection_state_t conn, amqp_channel_t channel,
         &props,                                 /* amqp_basic_properties_t properties */
         amqp_cstring_bytes(body)                /* amqp_bytes_t body */
     );
+
+    /* no longer need the header table */
+    free(table->entries);
+    free(table);
+
     reply = amqp_get_rpc_reply(conn);
     die_on_amqp_error(reply, "publish message");
+
     return;
 }
 
@@ -517,6 +532,7 @@ struct hoover_header **build_manifest( char **filenames ) {
 }
  */
 
+/* generate the hoover_header struct from a file */
 struct hoover_header *build_header( char *filename ) {
     struct hoover_header *header;
     unsigned char *hex_hash;
