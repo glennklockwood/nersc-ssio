@@ -11,5 +11,8 @@ producer: producer.c
 sha1: sha1.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< $(LDFLAGS) -lssl -lcrypto
 
+processfile: processfile.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< $(LDFLAGS) -lssl -lcrypto -lz
+
 clean:
 	rm producer *.o sha1
