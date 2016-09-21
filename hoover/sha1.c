@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#define SHA_DIGEST_LENGTH_HEX SHA_DIGEST_LENGTH * 2 + 1
+
 /* sha1_blob: Turn a byte blob into a hexified sha1 sum.  Not thread safe.
  *
  * input: blob - a byte array
@@ -16,7 +18,7 @@
  */
 unsigned char *sha1_blob( unsigned const char *blob, size_t len ) {
     unsigned char hash[SHA_DIGEST_LENGTH];
-    static unsigned char hex_hash[SHA_DIGEST_LENGTH * 2 + 1];
+    static unsigned char hex_hash[SHA_DIGEST_LENGTH_HEX];
     int i;
 
     SHA1(blob, len, hash);
@@ -28,12 +30,15 @@ unsigned char *sha1_blob( unsigned const char *blob, size_t len ) {
     return hex_hash;
 }
 
+/*
+ * Calculate SHA1 hash of all data located behind a file pointer
+ */
 unsigned char *sha1_file( FILE *fp, size_t buf_size ) {
     SHA_CTX ctx;
     char *buf;
     size_t bytes_read;
     unsigned char hash[SHA_DIGEST_LENGTH];
-    static unsigned char hex_hash[SHA_DIGEST_LENGTH * 2 + 1];
+    static unsigned char hex_hash[SHA_DIGEST_LENGTH_HEX];
     int i;
 
     buf = malloc( buf_size );
