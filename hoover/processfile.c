@@ -10,7 +10,8 @@
 
 #define SHA_DIGEST_LENGTH_HEX SHA_DIGEST_LENGTH * 2 + 1
 
-#define BLK_SIZE 128 * 1024
+/* #define BLK_SIZE 128 * 1024 */
+#define BLK_SIZE 16 * 1024
 
 struct block_state_structs {
     SHA_CTX sha_stream;
@@ -96,9 +97,9 @@ size_t process_file_by_block( FILE *fp, size_t block_size, void *out_buf, size_t
     }
 
     do { /* loop until no more input */
-
         bytes_read = fread(buf, 1, block_size, fp);
         /* if ( ferror(fp) ) ... */
+        fprintf( stderr, "input read (%ld)\n", bytes_read );
 
         if ( feof(fp) )
             flush = Z_FINISH;
@@ -129,28 +130,35 @@ size_t process_file_by_block( FILE *fp, size_t block_size, void *out_buf, size_t
             }
             tot_bytes_written += ( (char*)((bss->z_stream).next_out) - (char *)p_out );
 
-            printf( "tot_bytes_read = %ld; bss->z_stream.total_in = %ld\n",
-                tot_bytes_read, (bss->z_stream).total_in );
-            printf( "tot_bytes_written = %ld; bss->z_stream.total_out = %ld\n",
-                tot_bytes_written, (bss->z_stream).total_out );
+            fprintf( stderr, "tot_bytes_read = %ld; bss->z_stream.total_in = %ld\n", tot_bytes_read, (bss->z_stream).total_in );
+            fprintf( stderr, "tot_bytes_written = %ld; bss->z_stream.total_out = %ld\n", tot_bytes_written, (bss->z_stream).total_out );
 
             /* update the SHA1 of the compressed */
             SHA1_Update( &(bss->sha_stream_compressed), p_out, bytes_read );
 
             p_out = (bss->z_stream).next_out;
         } while ( (bss->z_stream).avail_out == 0 );
-
         if ( fail ) break;
-
     } while ( bytes_read != 0 ); /* loop until we run out of input */
 
+    fprintf( stderr, "total bytes written = %ld\n", bss->z_stream.total_out );
+
+    assert( bss->z_stream.avail_in == 0 );
+    if ( bss->z_stream.avail_out != 0 )
+    {
+        fprintf( stderr, "doing one last flush\n" );
+        deflate(&(bss->z_stream), flush);
+        tot_bytes_written += ( (char*)((bss->z_stream).next_out) - (char *)p_out );
+    }
+
+    fprintf( stderr, "total bytes written = %ld\n", bss->z_stream.total_out );
     assert( flush == Z_FINISH );
 
     /* finalize block-based algorithm state structures here */
     finalize_block_states( bss );
 
-    printf( "SHA1 uncompressed = %s\n", bss->sha_hash_hex );
-    printf( "SHA1 compressed = %s\n", bss->sha_hash_compressed_hex );
+    fprintf( stderr, "SHA1 uncompressed = %s\n", bss->sha_hash_hex );
+    fprintf( stderr, "SHA1 compressed = %s\n", bss->sha_hash_compressed_hex );
 
     return tot_bytes_written;
 }
