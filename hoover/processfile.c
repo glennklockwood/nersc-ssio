@@ -82,6 +82,7 @@ size_t process_file_by_block( FILE *fp, size_t block_size, void *out_buf, size_t
     void *buf,
          *p_out = out_buf;
     size_t bytes_read,
+           bytes_written,
            tot_bytes_read = 0,
            tot_bytes_written = 0;
     struct block_state_structs *bss;
@@ -128,14 +129,16 @@ size_t process_file_by_block( FILE *fp, size_t block_size, void *out_buf, size_t
                 fail = 1;
                 break;
             }
-            tot_bytes_written += ( (char*)((bss->z_stream).next_out) - (char *)p_out );
+            bytes_written = ( (char*)((bss->z_stream).next_out) - (char *)p_out );
+            tot_bytes_written += bytes_written;
+
+            /* update the SHA1 of the compressed */
+            SHA1_Update( &(bss->sha_stream_compressed), p_out, bytes_written );
 
             fprintf( stderr, "tot_bytes_read = %ld; bss->z_stream.total_in = %ld\n", tot_bytes_read, (bss->z_stream).total_in );
             fprintf( stderr, "tot_bytes_written = %ld; bss->z_stream.total_out = %ld\n", tot_bytes_written, (bss->z_stream).total_out );
 
-            /* update the SHA1 of the compressed */
-            SHA1_Update( &(bss->sha_stream_compressed), p_out, bytes_read );
-
+            /* update the pointer - there may be a cleaner way to do this */
             p_out = (bss->z_stream).next_out;
         } while ( (bss->z_stream).avail_out == 0 );
         if ( fail ) break;
@@ -148,7 +151,9 @@ size_t process_file_by_block( FILE *fp, size_t block_size, void *out_buf, size_t
     {
         fprintf( stderr, "doing one last flush\n" );
         deflate(&(bss->z_stream), flush);
-        tot_bytes_written += ( (char*)((bss->z_stream).next_out) - (char *)p_out );
+        bytes_written = ( (char*)((bss->z_stream).next_out) - (char *)p_out );
+        tot_bytes_written += bytes_written;
+        SHA1_Update( &(bss->sha_stream_compressed), p_out, bytes_written );
     }
 
     fprintf( stderr, "total bytes written = %ld\n", bss->z_stream.total_out );
