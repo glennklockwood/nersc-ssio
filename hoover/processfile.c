@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <assert.h> /* for debugging */
 
 #include <zlib.h>
 
@@ -11,63 +12,149 @@
 
 #define BLK_SIZE 128 * 1024
 
-/*
- * Calculate SHA1 hash of all data located behind a file pointer
- */
-unsigned char *sha1_file( FILE *fp, size_t buf_size ) {
-    SHA_CTX ctx;
-    char *buf;
-    size_t bytes_read;
-    unsigned char hash[SHA_DIGEST_LENGTH];
-    static unsigned char hex_hash[SHA_DIGEST_LENGTH_HEX];
+struct block_state_structs {
+    SHA_CTX sha_stream;
+    SHA_CTX sha_stream_compressed;
+    z_stream z_stream; 
+    unsigned char sha_hash[SHA_DIGEST_LENGTH];
+    unsigned char sha_hash_compressed[SHA_DIGEST_LENGTH];
+    char sha_hash_hex[SHA_DIGEST_LENGTH_HEX];
+    char sha_hash_compressed_hex[SHA_DIGEST_LENGTH_HEX];
+};
+
+
+struct block_state_structs *init_block_states( void ) {
+    struct block_state_structs *bss;
+
+    bss = malloc(sizeof(*bss));
+    if ( !bss ) return NULL;
+
+    /* init SHA calculator */
+    SHA1_Init( &(bss->sha_stream) );
+    SHA1_Init( &(bss->sha_stream_compressed) );
+    memset( bss->sha_hash, 0, SHA_DIGEST_LENGTH );
+    memset( bss->sha_hash_compressed, 0, SHA_DIGEST_LENGTH );
+    memset( bss->sha_hash_hex, 0, SHA_DIGEST_LENGTH_HEX );
+    memset( bss->sha_hash_compressed_hex, 0, SHA_DIGEST_LENGTH_HEX );
+
+    /* init zlib calculator */
+    (bss->z_stream).zalloc = Z_NULL;
+    (bss->z_stream).zfree = Z_NULL;
+    (bss->z_stream).opaque = Z_NULL;
+
+    if ( (deflateInit2(
+            &(bss->z_stream),
+            Z_DEFAULT_COMPRESSION,
+            Z_DEFLATED,
+            15 + 16, /* 15 is default for deflateInit, +32 enables gzip */
+            8,
+            Z_DEFAULT_STRATEGY)) != Z_OK ) {
+        free(bss);
+        return NULL;
+    }
+
+    return bss;
+}
+
+int *finalize_block_states( struct block_state_structs *bss ) {
     int i;
 
-    if ( !(buf = malloc( buf_size )) ) return NULL;
+    deflateEnd( &(bss->z_stream) );
+    SHA1_Final(bss->sha_hash, &(bss->sha_stream));
+    SHA1_Final(bss->sha_hash_compressed, &(bss->sha_stream_compressed));
 
-    SHA1_Init(&ctx);
-    do {
-        bytes_read = fread(buf, 1, buf_size, fp);
-        SHA1_Update( &ctx, buf, bytes_read );
-    } while ( bytes_read != 0 );
-
-    free( buf );
-
-    SHA1_Final(hash, &ctx);
-
-    /* note that hash does not terminate in \0 */
     for ( i = 0; i < SHA_DIGEST_LENGTH; i++ )
-        sprintf( (char*)&(hex_hash[2*i]), "%02x", hash[i] );
+    {
+        sprintf( (char*)&(bss->sha_hash_hex[2*i]), "%02x", bss->sha_hash[i] );
+        sprintf( (char*)&(bss->sha_hash_compressed_hex[2*i]), "%02x", bss->sha_hash_compressed[i] );
+    }
+    /* final character is \0 from when bss was initialized */
 
-    return hex_hash;
+    return 0;
 }
 
 /*
  * Read a file block by block, and pass these blocks through block-based
  * algorithms (hashing, compression, etc)
  */
-size_t process_file_by_block( FILE *fp, size_t block_size, void *out_buf ) {
-    void *buf, *p_out;
-    size_t bytes_read, tot_bytes_read = 0;
-    buf = malloc( block_size );
-    if ( !buf ) return -1;
-    p_out = out_buf;
+size_t process_file_by_block( FILE *fp, size_t block_size, void *out_buf, size_t out_buf_len ) {
+    void *buf,
+         *p_out = out_buf;
+    size_t bytes_read,
+           tot_bytes_read = 0,
+           tot_bytes_written = 0;
+    struct block_state_structs *bss;
+    int fail = 0;
+    int flush;
+
+    if ( !(buf = malloc( block_size )) ) return -1;
 
     /* initialize block-based algorithm state stuctures here */
+    if ( !(bss = init_block_states()) ) {
+        fprintf( stderr, "failed to init_block_states\n" );
+        return -1;
+    }
 
-    do {
+    do { /* loop until no more input */
+
         bytes_read = fread(buf, 1, block_size, fp);
+        /* if ( ferror(fp) ) ... */
 
-        /* execute block-based algorithms here; update buf */
+        if ( feof(fp) )
+            flush = Z_FINISH;
+        else
+            flush = Z_NO_FLUSH;
 
-        memcpy( p_out, buf, bytes_read );
-        p_out = (char*)p_out + bytes_read;
         tot_bytes_read += bytes_read;
-    } while ( bytes_read != 0 );
+        /* update the SHA1 of the pre-compressed data */
+        SHA1_Update( &(bss->sha_stream), buf, bytes_read );
+
+        /* set start of compression block */
+        (bss->z_stream).avail_in = bytes_read;
+        (bss->z_stream).next_in = (unsigned char*)buf;
+
+        do { /* loop until no more output */
+            /* avail_out = how big is the output buffer */
+            (bss->z_stream).avail_out = out_buf_len - tot_bytes_written;
+            /* next_out = pointer to the output buffer */
+            (bss->z_stream).next_out = (unsigned char*)out_buf + tot_bytes_written;
+
+            /* deflate updates avail_in and next_in as it consumes input data.
+               it may also update avail_out and next_out if it flushed any data,
+               but this is not necessarily the case since zlib may internally
+               buffer data */
+            if ( (deflate(&(bss->z_stream), flush)) != Z_OK ) {
+                fail = 1;
+                break;
+            }
+            tot_bytes_written += ( (char*)((bss->z_stream).next_out) - (char *)p_out );
+
+            printf( "tot_bytes_read = %ld; bss->z_stream.total_in = %ld\n",
+                tot_bytes_read, (bss->z_stream).total_in );
+            printf( "tot_bytes_written = %ld; bss->z_stream.total_out = %ld\n",
+                tot_bytes_written, (bss->z_stream).total_out );
+
+            /* update the SHA1 of the compressed */
+            SHA1_Update( &(bss->sha_stream_compressed), p_out, bytes_read );
+
+            p_out = (bss->z_stream).next_out;
+        } while ( (bss->z_stream).avail_out == 0 );
+
+        if ( fail ) break;
+
+    } while ( bytes_read != 0 ); /* loop until we run out of input */
+
+    assert( flush == Z_FINISH );
 
     /* finalize block-based algorithm state structures here */
+    finalize_block_states( bss );
 
-    return tot_bytes_read;
+    printf( "SHA1 uncompressed = %s\n", bss->sha_hash_hex );
+    printf( "SHA1 compressed = %s\n", bss->sha_hash_compressed_hex );
+
+    return tot_bytes_written;
 }
+
 
 /*
  * Write a memory buffer to a file block by block
@@ -91,43 +178,6 @@ size_t write_buffer_by_block( FILE *fp, size_t block_size, void *out_buf, size_t
     return tot_bytes_written;
 }
 
-/*
- *  compress a byte vector
- */
-size_t compress_buffer(char *src, char *dest, size_t src_size, size_t dest_size, size_t buf_size)
-{
-    int ret, flush;
-    z_stream strm;
-
-    /* allocate deflate state */
-    strm.zalloc = Z_NULL;
-    strm.zfree = Z_NULL;
-    strm.opaque = Z_NULL;
-    ret = deflateInit(&strm, Z_DEFAULT_COMPRESSION);
-    if (ret != Z_OK)
-        return ret;
-
-    strm.next_out = (unsigned char*)dest;
-    strm.avail_out = dest_size;
-    strm.next_in = (unsigned char*)src;
-    strm.avail_in = src_size;
-
-    while ( strm.total_in < src_size ) {
-        if ( strm.total_in == 0 ) {
-            /* out of buffer space for compression; abort */
-            return -1;
-        }
-
-        deflate( &strm, Z_NO_FLUSH );
-    }
-
-    if ( (deflate(&strm, Z_FINISH)) != Z_STREAM_END ) {
-        deflateEnd( &strm );
-        return -1;
-    }
-    deflateEnd( &strm );
-    return strm.total_out;
-}
 
 
 int main( int argc, char **argv )
@@ -136,6 +186,7 @@ int main( int argc, char **argv )
     struct stat st;
     void *out_buf;
     size_t out_buf_len;
+    int ret;
 
     if ( argc < 2 ) {
         fprintf( stderr, "Syntax: %s <input file> [output file]\n", argv[0] );
@@ -166,19 +217,23 @@ int main( int argc, char **argv )
         /* worst-case scenario is that compression adds +10%; hopefully it will
          * be negative
          */
-        out_buf = malloc(st.st_size * 1.1);
+        out_buf_len = st.st_size * 1.1;
+        out_buf = malloc(out_buf_len);
     }
 
-    out_buf_len = process_file_by_block( fp_in, BLK_SIZE, out_buf );
+    ret = process_file_by_block( fp_in, BLK_SIZE, out_buf, out_buf_len );
+
+    out_buf_len = (size_t)ret;
 
     fclose(fp_in);
 
-    if ( out_buf_len > 0 ) {
+    if ( ret > 0 ) {
         printf( "Writing out %ld bytes\n", out_buf_len );
         write_buffer_by_block( fp_out, BLK_SIZE, out_buf, out_buf_len );
     }
     else {
-        fprintf(stderr, "process_file_by_block returned %ld bytes read\n", out_buf_len );
+        fprintf(stderr, "process_file_by_block returned %d\n", ret );
+        fclose(fp_out);
         return 1;
     }
 

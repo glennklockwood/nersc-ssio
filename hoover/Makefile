@@ -3,7 +3,7 @@
 CFLAGS=-I/opt/local/include -Wno-deprecated-declarations -g
 LDFLAGS=-L/opt/local/lib -Bstatic
 
-all: producer sha1
+all: producer sha1 processfile
 
 producer: producer.c
 	$(CC) $(CPPFLAGS) -DCONFIG_FILE=\"amqpcreds.conf\" $(CFLAGS) -o $@ $< $(LDFLAGS) -lrabbitmq  -lssl -lcrypto
