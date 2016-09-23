@@ -9,7 +9,7 @@ do
 
     if [ ! -s "$bs.hz.gz" ]; then
         echo "processfile broke and returned a zero-sized file" >&2
-        rm "$bs.hz.gz"
+        rm "$bs.hz.gz" $bs
         continue
     fi
 
