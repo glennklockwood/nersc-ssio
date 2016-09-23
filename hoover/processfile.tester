@@ -1,0 +1,43 @@
+#!/bin/bash
+
+for bs in 0 1 2 1024 1025 16383 16384 16385 1m 1234567 20m
+do
+    echo "====== Trying block size of $bs ======"
+    dd if=/dev/random of=$bs bs=$bs count=1 2>/dev/null
+
+    ./processfile $bs $bs.hz.gz 2>&1 | grep SHA > tmp.txt
+
+    if [ ! -s "$bs.hz.gz" ]; then
+        echo "processfile broke and returned a zero-sized file" >&2
+        continue
+    fi
+
+    result_comp=$(awk '/SHA1 compressed/ { print $4 }' tmp.txt)
+    result_uncomp=$(awk '/SHA1 uncompressed/ { print $4 }' tmp.txt)
+    actual_comp=$(shasum $bs.hz.gz | awk '{print $1}')
+    actual_uncomp=$(gunzip -c $bs.hz.gz | shasum | awk '{print $1}')
+
+    original_uncomp=$(shasum $bs | awk '{print $1}')
+    rm $bs $bs.hz.gz tmp.txt
+
+    if [ "$result_comp" == "$actual_comp" ]; then
+        echo "SHA1 for compressed stream is calculated correctly ($result_comp)"
+    else
+        echo "SHA1 for compressed stream does NOT match" >&2
+        echo "$result_comp != $actual_comp" >&2
+    fi
+
+    if [ "$result_uncomp" == "$actual_uncomp" ]; then
+        echo "SHA1 for uncompressed stream is calculated correctly ($result_uncomp)"
+    else
+        echo "SHA1 for uncompressed stream does NOT match calculated value" >&2
+        echo "$result_comp != $actual_comp" >&2
+    fi
+
+    if [ "$actual_uncomp" == "$original_uncomp" ]; then
+        echo "SHA1 for decompressed stream matches original input ($actual_uncomp)"
+    else
+        echo "SHA1 for decompressed stream does NOT match input" >&2
+        echo "$actual_uncomp != $original_uncomp" >&2
+    fi
+done
