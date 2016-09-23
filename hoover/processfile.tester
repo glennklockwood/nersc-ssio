@@ -1,6 +1,6 @@
 #!/bin/bash
 
-for bs in 0 1 2 1024 1025 16383 16384 16385 1m 1234567 20m
+for bs in 0 1 2 1024 1025 $((128*1024-1)) $((128*1024)) $((128*1024+1)) 1m 1234567 20m
 do
     echo "====== Trying block size of $bs ======"
     dd if=/dev/random of=$bs bs=$bs count=1 2>/dev/null

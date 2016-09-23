@@ -1,3 +1,8 @@
+/*  hoover-io.c
+ *
+ *  Components of Hoover that are responsible for file I/O and processing data
+ *  streams (compression, checksumming, etc)
+ */
 #include <stdio.h>
 #include <openssl/sha.h>
 #include <string.h>
@@ -10,8 +15,7 @@
 
 #define SHA_DIGEST_LENGTH_HEX SHA_DIGEST_LENGTH * 2 + 1
 
-/* #define BLK_SIZE 128 * 1024 */
-#define BLK_SIZE 16 * 1024
+#define BLK_SIZE 128 * 1024
 
 struct block_state_structs {
     SHA_CTX sha_stream;
