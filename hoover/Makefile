@@ -3,7 +3,9 @@
 CFLAGS=-I/opt/local/include -Wno-deprecated-declarations -g
 LDFLAGS=-L/opt/local/lib -Bstatic
 
-all: producer sha1 processfile
+OBJECTS=producer sha1 test-hooverio
+
+all: $(OBJECTS)
 
 producer: producer.c
 	$(CC) $(CPPFLAGS) -DCONFIG_FILE=\"amqpcreds.conf\" $(CFLAGS) -o $@ $< $(LDFLAGS) -lrabbitmq  -lssl -lcrypto
@@ -11,8 +13,12 @@ producer: producer.c
 sha1: sha1.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< $(LDFLAGS) -lssl -lcrypto
 
-processfile: processfile.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< $(LDFLAGS) -lssl -lcrypto -lz
+hooverio.o: hooverio.c hooverio.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $<
+
+test-hooverio: test-hooverio.c hooverio.o
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $? $(LDFLAGS) -lssl -lcrypto -lz
 
 clean:
-	rm producer *.o sha1
+	-rm *.o $(OBJECTS)
+	-find ./ -type d -name \*.dSYM -print0 | xargs -0 rm -r
