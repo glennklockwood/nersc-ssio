@@ -29,12 +29,12 @@
 /* TODO: offer alternate options for systems not supporting SHA */
 #include <openssl/sha.h>
 
-#ifndef CONFIG_FILE
-#define CONFIG_FILE "/etc/opt/nersc/slurmd_log_rotate_mq.conf"
+#ifndef HOOVER_CONFIG_FILE
+#define HOOVER_CONFIG_FILE "/etc/opt/nersc/slurmd_log_rotate_mq.conf"
 #endif
 
-#ifndef MAX_SERVERS
-#define MAX_SERVERS 256
+#ifndef HOOVER_MAX_SERVERS
+#define HOOVER_MAX_SERVERS 256
 #endif
 
 #define SHA_DIGEST_LENGTH_HEX SHA_DIGEST_LENGTH * 2 + 1
@@ -43,7 +43,7 @@
  * Global structures
  */
 struct config {
-    char *servers[MAX_SERVERS];
+    char *servers[HOOVER_MAX_SERVERS];
     int max_hosts;
     int remaining_hosts;
     int port;
@@ -74,8 +74,6 @@ void die_on_amqp_error(amqp_rpc_reply_t x, char const *context);
 char *trim(char *string);
 char *select_server(struct config *config);
 struct config *read_config();
-unsigned char *sha1_file( FILE *fp, size_t buf_size );
-unsigned char *sha1_blob( unsigned const char *blob, size_t len );
 struct hoover_header *build_header( char *filename );
 
 /*
@@ -102,7 +100,7 @@ void save_config(struct config *config, FILE *out) {
 }
 
 struct config *read_config() {
-    FILE *fp = fopen(CONFIG_FILE, "r");
+    FILE *fp = fopen(HOOVER_CONFIG_FILE, "r");
     if (fp == NULL) return NULL;
 
     struct config *config = (struct config *) malloc(sizeof(struct config));
@@ -138,13 +136,13 @@ struct config *read_config() {
                 t_value = trim(t_value);
                 if (t_value == NULL) continue;
 
-                if ( server_cnt < MAX_SERVERS ) {
+                if ( server_cnt < HOOVER_MAX_SERVERS ) {
                     config->servers[server_cnt] = strdup(t_value);
                     printf( "Found server %s\n", config->servers[server_cnt] );
                     server_cnt++;
                 }
                 else {
-                    fprintf( stderr, "too many servers in config file; truncating at %d\n", MAX_SERVERS );
+                    fprintf( stderr, "too many servers in config file; truncating at %d\n", HOOVER_MAX_SERVERS );
                     break;
                 }
             }
@@ -260,66 +258,6 @@ char *select_server(struct config *config) {
     return server;
 }
 
-
-/* sha1_blob: Turn a byte blob into a hexified sha1 sum.  Not thread safe.
- *
- * input: blob - a byte array
- *        len - length of that byte array
- * output: SHA1 hash with each byte expressed as a hex value
- *
- * Note that hashing strings should NOT include the terminal NULL
- * byte since that is a C construct.  Also be careful when using
- * strlen() vs. sizeof(); sizeof() includes padding bytes if blob
- * is not aligned to 8 bytes.
- */
-unsigned char *sha1_blob( unsigned const char *blob, size_t len ) {
-    unsigned char hash[SHA_DIGEST_LENGTH];
-    static unsigned char hex_hash[SHA_DIGEST_LENGTH_HEX];
-    int i;
-
-    SHA1(blob, len, hash);
-
-    /* note that hash does not terminate in \0 */
-    for ( i = 0; i < SHA_DIGEST_LENGTH; i++ )
-        sprintf( (char*)&(hex_hash[2*i]), "%02x", hash[i] );
-
-    return hex_hash;
-}
-
-/*
- * Calculate SHA1 hash of all data located behind a file pointer
- */
-unsigned char *sha1_file( FILE *fp, size_t buf_size ) {
-    SHA_CTX ctx;
-    char *buf;
-    size_t bytes_read;
-    unsigned char hash[SHA_DIGEST_LENGTH];
-    static unsigned char hex_hash[SHA_DIGEST_LENGTH_HEX];
-    int i;
-
-    buf = malloc( buf_size );
-    if ( !buf ) return NULL;
-
-    SHA1_Init(&ctx);
-    do {
-        bytes_read = fread(buf, 1, buf_size, fp);
-        SHA1_Update( &ctx, buf, bytes_read );
-    } while ( bytes_read != 0 );
-
-    free( buf );
-
-    SHA1_Final(hash, &ctx);
-
-    /* note that hash does not terminate in \0 */
-    for ( i = 0; i < SHA_DIGEST_LENGTH; i++ )
-        sprintf( (char*)&(hex_hash[2*i]), "%02x", hash[i] );
-
-    return hex_hash;
-}
-
-
-
-
 int main(int argc, char **argv) {
 
     srand(time(NULL) ^ getpid());
@@ -411,13 +349,14 @@ int main(int argc, char **argv) {
     );
     die_on_amqp_error(amqp_get_rpc_reply(conn), "exchange declare");
 
-    /* build headers here */
-    message = "hello world";
+    /* build header */
     header = build_header( argv[1] );
     if ( !header ) {
         fprintf( stderr, "got null header\n" );
         return 1;
     }
+
+    /* build message */
 
     /* send the message */
     send_message( 
@@ -535,7 +474,6 @@ struct hoover_header **build_manifest( char **filenames ) {
 /* generate the hoover_header struct from a file */
 struct hoover_header *build_header( char *filename ) {
     struct hoover_header *header;
-    unsigned char *hex_hash;
     struct stat st;
     FILE *fp;
 
@@ -556,15 +494,11 @@ struct hoover_header *build_header( char *filename ) {
 
     fclose(fp);
 
-    hex_hash = sha1_file( fp, 32*1024 /* 32 kib is arbitrary */ );
-
-    printf( "hex_hash is [%s]\n", hex_hash );
-
     strncpy( header->filename, filename, MAX_PATH );
 
     header->size = st.st_size;
 
-    strncpy( (char*)header->hash, (const char*)hex_hash, SHA_DIGEST_LENGTH_HEX );
+/*  strncpy( (char*)header->hash, (const char*)hex_hash, SHA_DIGEST_LENGTH_HEX ); */
 
     printf("file=[%s],size=[%ld],sha=[%s]\n", header->filename, header->size, header->hash );
 

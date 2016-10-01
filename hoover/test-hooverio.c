@@ -12,9 +12,7 @@ int main( int argc, char **argv )
 {
     FILE *fp_in, *fp_out;
     struct stat st;
-    void *out_buf;
-    size_t out_buf_len;
-    int ret;
+    struct hoover_data_obj *hdo;
 
     if ( argc < 2 ) {
         fprintf( stderr, "Syntax: %s <input file> [output file]\n", argv[0] );
@@ -35,32 +33,20 @@ int main( int argc, char **argv )
         return ENOENT;
     }
 
-    /* get file size so we know how big to allocate our buffer */
-    if ( fstat(fileno(fp_in), &st) != 0 ) {
-        fclose(fp_in);
-        fclose(fp_out);
-        return 1;
-    }
-    else {
-        /* worst-case scenario is that compression adds +10%; hopefully it will
-         * be negative
-         */
-        out_buf_len = st.st_size * 1.1;
-        out_buf = malloc(out_buf_len);
-    }
-
-    ret = process_file_by_block( fp_in, HOOVER_BLK_SIZE, out_buf, out_buf_len );
-
-    out_buf_len = (size_t)ret;
+    hdo = hoover_load_file( fp_in, HOOVER_BLK_SIZE );
 
     fclose(fp_in);
 
-    if ( ret > 0 ) {
-        printf( "Writing out %ld bytes\n", out_buf_len );
-        write_buffer_by_block( fp_out, HOOVER_BLK_SIZE, out_buf, out_buf_len );
+    if ( hdo != NULL ) {
+        printf( "Loaded:        %ld bytes\n", hdo->size_orig );
+        printf( "Original hash: %s\n",        hdo->hash_orig );
+        printf( "Saving:        %ld bytes\n", hdo->size );
+        printf( "Saved hash:    %s\n",        hdo->hash );
+        hoover_write_hdo( fp_out, hdo, HOOVER_BLK_SIZE );
+        free_hdo( hdo );
     }
     else {
-        fprintf(stderr, "process_file_by_block returned %d\n", ret );
+        fprintf(stderr, "hoover_load_file failed (errno=%d)\n", errno );
         fclose(fp_out);
         return 1;
     }
