@@ -43,7 +43,7 @@ int main( int argc, char **argv )
         printf( "Saving:        %ld bytes\n", hdo->size );
         printf( "Saved hash:    %s\n",        hdo->hash );
         hoover_write_hdo( fp_out, hdo, HOOVER_BLK_SIZE );
-        free_hdo( hdo );
+        hoover_free_hdo( hdo );
     }
     else {
         fprintf(stderr, "hoover_load_file failed (errno=%d)\n", errno );

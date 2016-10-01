@@ -208,7 +208,7 @@ struct hoover_data_obj *hoover_load_file( FILE *fp, size_t block_size ) {
 
 
 /* free memory associated with a hoover data object */
-void free_hdo( struct hoover_data_obj *hdo ) {
+void hoover_free_hdo( struct hoover_data_obj *hdo ) {
     if ( hdo == NULL ) {
         fprintf( stderr, "hoover_data_obj: received NULL hdo\n" );
         return;

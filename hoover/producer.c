@@ -26,6 +26,8 @@
 #define MAX_PATH PATH_MAX
 #endif
 
+#include "hooverio.h"
+
 /* TODO: offer alternate options for systems not supporting SHA */
 #include <openssl/sha.h>
 
@@ -74,7 +76,7 @@ void die_on_amqp_error(amqp_rpc_reply_t x, char const *context);
 char *trim(char *string);
 char *select_server(struct config *config);
 struct config *read_config();
-struct hoover_header *build_header( char *filename );
+struct hoover_header *build_header( char *filename, struct hoover_data_obj *hdo );
 
 /*
  * Command-line and RabbitMQ configuration parameters
@@ -274,6 +276,9 @@ int main(int argc, char **argv) {
 
     int connected;
 
+    FILE *fp;
+    struct hoover_data_obj *hdo;
+
     if ( !(config = read_config()) ) {
         fprintf( stderr, "NULL config\n" );
         return 1;
@@ -349,25 +354,33 @@ int main(int argc, char **argv) {
     );
     die_on_amqp_error(amqp_get_rpc_reply(conn), "exchange declare");
 
-    /* build header */
-    header = build_header( argv[1] );
-    if ( !header ) {
-        fprintf( stderr, "got null header\n" );
+    /* load file into hoover data object */
+    fp = fopen( argv[1], "r" );
+    if ( !fp ) {
+        fprintf( stderr, "could not open file %s\n", argv[1] );
         return 1;
     }
+    hdo = hoover_load_file( fp, HOOVER_BLK_SIZE );
 
-    /* build message */
+    /* build header */
+    header = build_header( argv[1], hdo );
+    if ( !header ) {
+        fprintf( stderr, "got null header\n" );
+        hoover_free_hdo( hdo );
+        return 1;
+    }
 
     /* send the message */
     send_message( 
         conn, 
         1,
-        message,
+        hdo->data,
         config->exchange,
         config->routing_key,
         header );
 
     free(header);
+    hoover_free_hdo( hdo );
 
     die_on_amqp_error(amqp_channel_close(conn, 1, AMQP_REPLY_SUCCESS), "channel close");
     die_on_amqp_error(amqp_connection_close(conn, AMQP_REPLY_SUCCESS), "connection close");
@@ -472,35 +485,24 @@ struct hoover_header **build_manifest( char **filenames ) {
  */
 
 /* generate the hoover_header struct from a file */
-struct hoover_header *build_header( char *filename ) {
+struct hoover_header *build_header( char *filename, struct hoover_data_obj *hdo ) {
     struct hoover_header *header;
     struct stat st;
-    FILE *fp;
 
     header = malloc(sizeof(struct hoover_header));
     if ( !header )
         return NULL;
 
-    if ( !(fp = fopen( filename, "r" )) ) {
-        free(header);
-        return NULL;
-    }
-
-    if ( fstat(fileno(fp), &st) != 0 ) {
-        free(header);
-        fclose(fp);
-        return NULL;
-    }
-
-    fclose(fp);
-
     strncpy( header->filename, filename, MAX_PATH );
 
-    header->size = st.st_size;
+    header->size = hdo->size;
 
-/*  strncpy( (char*)header->hash, (const char*)hex_hash, SHA_DIGEST_LENGTH_HEX ); */
+    strncpy( (char*)header->hash, (const char*)hdo->hash, SHA_DIGEST_LENGTH_HEX );
 
-    printf("file=[%s],size=[%ld],sha=[%s]\n", header->filename, header->size, header->hash );
+    printf( "file=[%s],size=[%ld],sha=[%s]\n",
+        header->filename,
+        header->size,
+        header->hash );
 
     return header;
 }

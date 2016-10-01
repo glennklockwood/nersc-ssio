@@ -7,8 +7,8 @@ OBJECTS=producer sha1 test-hooverio
 
 all: $(OBJECTS)
 
-producer: producer.c
-	$(CC) $(CPPFLAGS) -DCONFIG_FILE=\"amqpcreds.conf\" $(CFLAGS) -o $@ $< $(LDFLAGS) -lrabbitmq  -lssl -lcrypto
+producer: producer.c hooverio.o
+	$(CC) $(CPPFLAGS) -DHOOVER_CONFIG_FILE=\"amqpcreds.conf\" $(CFLAGS) -o $@ $? $(LDFLAGS) -lrabbitmq  -lssl -lcrypto -lz
 
 sha1: sha1.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< $(LDFLAGS) -lssl -lcrypto

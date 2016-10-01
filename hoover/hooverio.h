@@ -24,6 +24,6 @@ struct hoover_data_obj {
  * function prototypes
  */
 
-void free_hdo( struct hoover_data_obj *hdo );
+void hoover_free_hdo( struct hoover_data_obj *hdo );
 size_t hoover_write_hdo( FILE *fp, struct hoover_data_obj *hdo, size_t block_size );
 struct hoover_data_obj *hoover_load_file( FILE *fp, size_t block_size );
