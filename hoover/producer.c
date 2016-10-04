@@ -69,8 +69,9 @@ struct hoover_header {
 /*
  *  Function prototypes
  */
-void send_message( amqp_connection_state_t conn, amqp_channel_t channel,
-    char *body, char *exchange, char *routing_key, struct hoover_header *header );
+void send_message(amqp_connection_state_t conn, amqp_channel_t channel,
+                  amqp_bytes_t *body, char *exchange, char *routing_key,
+                  struct hoover_header *header);
 void save_config(struct config *config, FILE *out);
 void die_on_amqp_error(amqp_rpc_reply_t x, char const *context);
 char *trim(char *string);
@@ -260,6 +261,123 @@ char *select_server(struct config *config) {
     return server;
 }
 
+
+void destroy_amqp_table( amqp_table_t *table ) {
+    int i;
+    for ( i = 0; i < table->num_entries; i++ ) {
+        free(&(table->entries[i]));
+    }
+    free(table);
+    return;
+}
+
+/* create_amqp_header_table - convert a hoover_header struct into an AMQP table
+ * to be attached to a message
+ */
+amqp_table_t *create_amqp_header_table( struct hoover_header *header ) {
+    amqp_table_t *table;
+    amqp_table_entry_t *entries;
+
+    if ( !(table = malloc(sizeof(*table))) )
+        return NULL;
+    if ( !(entries = malloc(3 * sizeof(*entries))) ) {
+        free(table);
+        return NULL;
+    }
+
+    table->num_entries = 3;
+
+    /* Set headers */
+    entries[0].key = amqp_cstring_bytes("filename");
+    entries[0].value.kind = AMQP_FIELD_KIND_UTF8;
+    entries[0].value.value.bytes = amqp_cstring_bytes(header->filename);
+
+    entries[1].key = amqp_cstring_bytes("size");
+    entries[1].value.kind = AMQP_FIELD_KIND_I64;
+    entries[1].value.value.i64 = header->size;
+
+    entries[2].key = amqp_cstring_bytes("checksum");
+    entries[2].value.kind = AMQP_FIELD_KIND_UTF8;
+    entries[2].value.value.bytes = amqp_cstring_bytes((char*)header->hash);
+
+    table->entries = entries;
+
+    return table;
+}
+
+/* convert a bunch of runtime structures into an AMQP message and send it  */
+void send_message( amqp_connection_state_t conn, amqp_channel_t channel,
+                   amqp_bytes_t *body, char *exchange, char *routing_key,
+                   struct hoover_header *header ) {
+    amqp_rpc_reply_t reply;
+    amqp_basic_properties_t props;
+    amqp_table_t *table;
+
+    memset( &props, 0, sizeof(props) );
+
+    /* create the amqp_table that contains the header metadata */
+    table = create_amqp_header_table( header );
+
+    /* TODO: figure out what these flags mean */
+    props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG | AMQP_BASIC_HEADERS_FLAG;
+    props.delivery_mode = 2; /* 1 or 2? */
+    props.headers = *table;
+
+    /* Send the actual AMQP message */
+    printf( "Sending message\n" );
+    amqp_basic_publish(
+        conn,                               /* amqp_connection_state_t state */
+        1,                                  /* amqp_channel_t channel */
+        amqp_cstring_bytes(exchange),       /* amqp_bytes_t exchange */
+        amqp_cstring_bytes(routing_key),    /* amqp_bytes_t routing_key */
+        0,                                  /* amqp_boolean_t mandatory */
+        0,                                  /* amqp_boolean_t immediate */
+        &props,                             /* amqp_basic_properties_t properties */
+        *body                               /* amqp_bytes_t body */
+    );
+
+    /* no longer need the header table */
+    free(table->entries);
+    free(table);
+
+    reply = amqp_get_rpc_reply(conn);
+    die_on_amqp_error(reply, "publish message");
+
+    return;
+}
+
+/*
+ * input: list of file name strings
+ * output: list of hoover headers...or just the json blob?  python version
+ *         returns a dict which gets serialized later
+ *
+struct hoover_header **build_manifest( char **filenames ) {
+}
+ */
+
+/* generate the hoover_header struct from a file */
+struct hoover_header *build_header( char *filename, struct hoover_data_obj *hdo ) {
+    struct hoover_header *header;
+    struct stat st;
+
+    header = malloc(sizeof(struct hoover_header));
+    if ( !header )
+        return NULL;
+
+    strncpy( header->filename, filename, MAX_PATH );
+
+    header->size = hdo->size;
+
+    strncpy( (char*)header->hash, (const char*)hdo->hash, SHA_DIGEST_LENGTH_HEX );
+
+    printf( "file=[%s],size=[%ld],sha=[%s]\n",
+        header->filename,
+        header->size,
+        header->hash );
+
+    return header;
+}
+
 int main(int argc, char **argv) {
 
     srand(time(NULL) ^ getpid());
@@ -267,11 +385,11 @@ int main(int argc, char **argv) {
     amqp_socket_t *socket;
     amqp_connection_state_t conn;
     amqp_rpc_reply_t reply;
+    amqp_bytes_t message;
     int status;
 
     struct config *config;
     struct hoover_header *header;
-    char *message = NULL;
     char *hostname;
 
     int connected;
@@ -279,6 +397,9 @@ int main(int argc, char **argv) {
     FILE *fp;
     struct hoover_data_obj *hdo;
 
+    /*
+     *  Initialize a bunch of nonsense
+     */
     if ( !(config = read_config()) ) {
         fprintf( stderr, "NULL config\n" );
         return 1;
@@ -354,6 +475,10 @@ int main(int argc, char **argv) {
     );
     die_on_amqp_error(amqp_get_rpc_reply(conn), "exchange declare");
 
+    /*
+     *  Begin handling data here
+     */
+
     /* load file into hoover data object */
     fp = fopen( argv[1], "r" );
     if ( !fp ) {
@@ -371,10 +496,12 @@ int main(int argc, char **argv) {
     }
 
     /* send the message */
+    message.len = hdo->size;
+    message.bytes = hdo->data;
     send_message( 
         conn, 
         1,
-        hdo->data,
+        &message,
         config->exchange,
         config->routing_key,
         header );
@@ -391,118 +518,3 @@ int main(int argc, char **argv) {
 }
 
 
-void destroy_amqp_table( amqp_table_t *table ) {
-    int i;
-    for ( i = 0; i < table->num_entries; i++ ) {
-        free(&(table->entries[i]));
-    }
-    free(table);
-    return;
-}
-
-/* create_amqp_header_table - convert a hoover_header struct into an AMQP table
- * to be attached to a message
- */
-amqp_table_t *create_amqp_header_table( struct hoover_header *header ) {
-    amqp_table_t *table;
-    amqp_table_entry_t *entries;
-
-    if ( !(table = malloc(sizeof(*table))) )
-        return NULL;
-    if ( !(entries = malloc(3 * sizeof(*entries))) ) {
-        free(table);
-        return NULL;
-    }
-
-    table->num_entries = 3;
-
-    /* Set headers */
-    entries[0].key = amqp_cstring_bytes("filename");
-    entries[0].value.kind = AMQP_FIELD_KIND_UTF8;
-    entries[0].value.value.bytes = amqp_cstring_bytes(header->filename);
-
-    entries[1].key = amqp_cstring_bytes("size");
-    entries[1].value.kind = AMQP_FIELD_KIND_I64;
-    entries[1].value.value.i64 = header->size;
-
-    entries[2].key = amqp_cstring_bytes("checksum");
-    entries[2].value.kind = AMQP_FIELD_KIND_UTF8;
-    entries[2].value.value.bytes = amqp_cstring_bytes((char*)header->hash);
-
-    table->entries = entries;
-
-    return table;
-}
-
-/* convert a bunch of runtime structures into an AMQP message and send it  */
-void send_message( amqp_connection_state_t conn, amqp_channel_t channel,
-                   char *body, char *exchange, char *routing_key,
-                   struct hoover_header *header ) {
-    amqp_rpc_reply_t reply;
-    amqp_basic_properties_t props;
-    amqp_table_t *table;
-
-    memset( &props, 0, sizeof(props) );
-
-    /* create the amqp_table that contains the header metadata */
-    table = create_amqp_header_table( header );
-
-    /* TODO: figure out what these flags mean */
-    props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG | AMQP_BASIC_HEADERS_FLAG;
-    props.delivery_mode = 2; /* 1 or 2? */
-    props.headers = *table;
-
-    /* Send the actual AMQP message */
-    printf( "Sending message\n" );
-    amqp_basic_publish(
-        conn,                                   /* amqp_connection_state_t state */
-        1,                                      /* amqp_channel_t channel */
-        amqp_cstring_bytes(exchange),           /* amqp_bytes_t exchange */
-        amqp_cstring_bytes(routing_key),        /* amqp_bytes_t routing_key */
-        0,                                      /* amqp_boolean_t mandatory */
-        0,                                      /* amqp_boolean_t immediate */
-        &props,                                 /* amqp_basic_properties_t properties */
-        amqp_cstring_bytes(body)                /* amqp_bytes_t body */
-    );
-
-    /* no longer need the header table */
-    free(table->entries);
-    free(table);
-
-    reply = amqp_get_rpc_reply(conn);
-    die_on_amqp_error(reply, "publish message");
-
-    return;
-}
-
-/*
- * input: list of file name strings
- * output: list of hoover headers...or just the json blob?  python version
- *         returns a dict which gets serialized later
- *
-struct hoover_header **build_manifest( char **filenames ) {
-}
- */
-
-/* generate the hoover_header struct from a file */
-struct hoover_header *build_header( char *filename, struct hoover_data_obj *hdo ) {
-    struct hoover_header *header;
-    struct stat st;
-
-    header = malloc(sizeof(struct hoover_header));
-    if ( !header )
-        return NULL;
-
-    strncpy( header->filename, filename, MAX_PATH );
-
-    header->size = hdo->size;
-
-    strncpy( (char*)header->hash, (const char*)hdo->hash, SHA_DIGEST_LENGTH_HEX );
-
-    printf( "file=[%s],size=[%ld],sha=[%s]\n",
-        header->filename,
-        header->size,
-        header->hash );
-
-    return header;
-}
