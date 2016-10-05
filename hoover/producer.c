@@ -7,6 +7,7 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <unistd.h>
 #include <string.h>
 #include <limits.h>
@@ -66,6 +67,15 @@ struct hoover_header {
     unsigned char hash[SHA_DIGEST_LENGTH_HEX];
 };
 
+/* each hoover_tube just aggregates a connection, a socket, a channel, and an
+   exchange into a single object for simplicity.  For simple message passing,
+   we only need to define one of each to send messages. */
+struct hoover_tube {
+    amqp_socket_t *socket;
+    amqp_channel_t channel; /* I have no idea why channel passed around by value by rabbitmq-c */
+    amqp_connection_state_t connection;
+};
+
 /*
  *  Function prototypes
  */
@@ -73,9 +83,11 @@ void send_message(amqp_connection_state_t conn, amqp_channel_t channel,
                   amqp_bytes_t *body, char *exchange, char *routing_key,
                   struct hoover_header *header);
 void save_config(struct config *config, FILE *out);
-void die_on_amqp_error(amqp_rpc_reply_t x, char const *context);
+int parse_amqp_response(amqp_rpc_reply_t x, char const *context, int die);
 char *trim(char *string);
 char *select_server(struct config *config);
+struct hoover_tube *create_hoover_tube(struct config *config);
+void destroy_hoover_tube( struct hoover_tube *tube );
 struct config *read_config();
 struct hoover_header *build_header( char *filename, struct hoover_data_obj *hdo );
 
@@ -201,12 +213,12 @@ char *trim(char *string) {
  * Check return of a rabbitmq-c call and throw an error + clean up if it is a
  * failure
  */
-void die_on_amqp_error(amqp_rpc_reply_t x, char const *context) {
+int parse_amqp_response(amqp_rpc_reply_t x, char const *context, int die) {
     amqp_connection_close_t *conn_close_reply;
     amqp_channel_close_t *chan_close_reply;
     switch (x.reply_type) {
     case AMQP_RESPONSE_NORMAL:
-        return;
+        return 0;
 
     case AMQP_RESPONSE_NONE:
         fprintf(stderr, "%s: missing RPC reply type!\n", context);
@@ -238,7 +250,10 @@ void die_on_amqp_error(amqp_rpc_reply_t x, char const *context) {
         }
         break;
     }
-    exit(1);
+    if ( die )
+        exit(1);
+    else
+        return 1;
 }
 
 /*
@@ -341,7 +356,7 @@ void send_message( amqp_connection_state_t conn, amqp_channel_t channel,
     free(table);
 
     reply = amqp_get_rpc_reply(conn);
-    die_on_amqp_error(reply, "publish message");
+    parse_amqp_response(reply, "publish message", true);
 
     return;
 }
@@ -378,24 +393,115 @@ struct hoover_header *build_header( char *filename, struct hoover_data_obj *hdo 
     return header;
 }
 
-int main(int argc, char **argv) {
-
-    srand(time(NULL) ^ getpid());
-    
-    amqp_socket_t *socket;
-    amqp_connection_state_t conn;
+struct hoover_tube *create_hoover_tube(struct config *config) {
+    int connected, status;
+    char *hostname;
+    struct hoover_tube *tube;
     amqp_rpc_reply_t reply;
+
+    if (!(tube = malloc(sizeof(*tube))))
+        return NULL;
+
+    /* establish socket */
+    for (connected = 0, hostname = select_server(config);
+                        hostname != NULL;
+                        hostname = select_server(config) ) {
+        printf( "Attempting to connect to %s:%d\n", hostname, config->port );
+        tube->connection = amqp_new_connection();
+
+        if ( config->use_ssl )
+            tube->socket = amqp_ssl_socket_new(tube->connection);
+        else
+            tube->socket = amqp_tcp_socket_new(tube->connection);
+
+        if (tube->socket == NULL) {
+            fprintf(stderr, "Failed to create socket!\n");
+            destroy_hoover_tube(tube);
+            return NULL;
+        }
+
+        if ( config->use_ssl ) {
+            amqp_ssl_socket_set_verify_peer(tube->socket, 0);
+            amqp_ssl_socket_set_verify_hostname(tube->socket, 0);
+        }
+
+        status = amqp_socket_open(tube->socket, hostname, config->port);
+
+        if (status != 0) {
+            fprintf( stderr, "Failed to connect to %s:%d; moving on...\n", hostname, config->port );
+        }
+        else {
+            connected = 1;
+            break;
+        }
+    }
+
+    /* make sure connection exists */
+    if (!connected) {
+        fprintf(stderr, "Failed to connect to any servers!\n");
+        destroy_hoover_tube(tube);
+        return NULL;
+    }
+
+    /* authenticate */
+    reply = amqp_login(
+        tube->connection,       /* amqp_connection_state_t state */
+        config->vhost,          /* char const *vhost */
+        0,                      /* int channel_max */
+        131072,                 /* int frame_max */
+        0,                      /* int heartbeat */
+        AMQP_SASL_METHOD_PLAIN, /* amqp_sasl_method_enum sasl_method */
+        config->username,
+        config->password);
+
+    if ( parse_amqp_response(reply, "login", false) ) {
+        destroy_hoover_tube(tube);
+        return NULL;
+    }
+
+    /* open channel */
+    tube->channel = 1;
+    amqp_channel_open(tube->connection, tube->channel);
+    if ( parse_amqp_response(amqp_get_rpc_reply(tube->connection), "channel open", false) ) {
+        destroy_hoover_tube(tube);
+        return NULL;
+    }
+
+    amqp_exchange_declare(
+        tube->connection,                         /* amqp_connection_state_t state */
+        tube->channel,                            /* amqp_channel_t channel */
+        amqp_cstring_bytes(config->exchange),     /* amqp_bytes_t exchange */
+        amqp_cstring_bytes(config->exchange_type),/* amqp_bytes_t type */
+        0,                                        /* amqp_boolean_t passive */
+        0,                                        /* amqp_boolean_t durable */
+        0,                                        /* amqp_boolean_t auto_delete */
+        0,                                        /* amqp_boolean_t internal */
+        amqp_empty_table                          /* amqp_table_t arguments */
+    );
+    if ( parse_amqp_response(amqp_get_rpc_reply(tube->connection), "exchange declare", false) ) {
+        destroy_hoover_tube(tube);
+        return NULL;
+    }
+
+    return tube;
+}
+
+void destroy_hoover_tube( struct hoover_tube *tube ) {
+    free(tube);
+    return;
+}
+
+int main(int argc, char **argv) {
     amqp_bytes_t message;
     int status;
 
     struct config *config;
     struct hoover_header *header;
-    char *hostname;
-
-    int connected;
-
-    FILE *fp;
     struct hoover_data_obj *hdo;
+    struct hoover_tube *tube;
+    FILE *fp;
+
+    srand(time(NULL) ^ getpid());
 
     /*
      *  Initialize a bunch of nonsense
@@ -407,79 +513,23 @@ int main(int argc, char **argv) {
     else {
         save_config( config, stdout );
     }
-
     if ( argc < 2 ) {
         fprintf( stderr, "Syntax: %s <file name>\n", argv[0] );
         return 1;
     }
 
-    for ( connected = 0, hostname = select_server(config); hostname != NULL ; hostname = select_server(config) ) {
-        printf( "Attempting to connect to %s:%d\n", hostname, config->port );
-        conn = amqp_new_connection();
-
-        if ( config->use_ssl )
-            socket = amqp_ssl_socket_new(conn);
-        else
-            socket = amqp_tcp_socket_new(conn);
-
-        if (socket == NULL) {
-            fprintf(stderr, "Failed to create socket!\n");
-            exit(1);
-        }
-
-        if ( config->use_ssl ) {
-            amqp_ssl_socket_set_verify_peer(socket, 0);
-            amqp_ssl_socket_set_verify_hostname(socket, 0);
-        }
-
-        status = amqp_socket_open(socket, hostname, config->port);
-
-        if (status != 0) {
-            fprintf( stderr, "Failed to connect to %s:%d; moving on...\n", hostname, config->port );
-        }
-        else {
-            connected = 1;
-            break;
-        }
+    /*
+     *  Set up the AMQP connection, socket, exchange, and channel
+     */
+    if ( (tube = create_hoover_tube(config)) == NULL ) {
+        fprintf( stderr, "could not establish tube\n" );
+        return 1;
     }
-
-    if (!connected) {
-        fprintf(stderr, "Failed to connect to any servers!\n");
-        exit(1);
-    }
-
-    reply = amqp_login(
-            conn,                            /* amqp_connection_state_t state */
-            config->vhost,                               /* char const *vhost */
-            0,                                             /* int channel_max */
-            131072,                                          /* int frame_max */
-            0,                                               /* int heartbeat */
-            AMQP_SASL_METHOD_PLAIN,      /* amqp_sasl_method_enum sasl_method */
-            config->username,
-            config->password);
-    die_on_amqp_error(reply, "login");
-
-    amqp_channel_open(conn, 1);
-    die_on_amqp_error(amqp_get_rpc_reply(conn), "channel open");
-
-    amqp_exchange_declare(
-            conn,                            /* amqp_connection_state_t state */
-            1,                                      /* amqp_channel_t channel */
-            amqp_cstring_bytes(config->exchange),    /* amqp_bytes_t exchange */
-            amqp_cstring_bytes(config->exchange_type),    /* amqp_bytes_t type */
-            0,                                      /* amqp_boolean_t passive */
-            0,                                      /* amqp_boolean_t durable */
-            0,                                  /* amqp_boolean_t auto_delete */
-            0,                                     /* amqp_boolean_t internal */
-            amqp_empty_table                        /* amqp_table_t arguments */
-    );
-    die_on_amqp_error(amqp_get_rpc_reply(conn), "exchange declare");
 
     /*
      *  Begin handling data here
      */
-
-    /* load file into hoover data object */
+    /* Load file into hoover data object */
     fp = fopen( argv[1], "r" );
     if ( !fp ) {
         fprintf( stderr, "could not open file %s\n", argv[1] );
@@ -487,7 +537,7 @@ int main(int argc, char **argv) {
     }
     hdo = hoover_load_file( fp, HOOVER_BLK_SIZE );
 
-    /* build header */
+    /* Build header */
     header = build_header( argv[1], hdo );
     if ( !header ) {
         fprintf( stderr, "got null header\n" );
@@ -495,26 +545,28 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* send the message */
+    /* Send the message */
     message.len = hdo->size;
     message.bytes = hdo->data;
     send_message( 
-        conn, 
+        tube->connection, 
         1,
         &message,
         config->exchange,
         config->routing_key,
         header );
 
+    /* Tear down everything */
     free(header);
     hoover_free_hdo( hdo );
 
-    die_on_amqp_error(amqp_channel_close(conn, 1, AMQP_REPLY_SUCCESS), "channel close");
-    die_on_amqp_error(amqp_connection_close(conn, AMQP_REPLY_SUCCESS), "connection close");
+    parse_amqp_response(amqp_channel_close(tube->connection, 1, AMQP_REPLY_SUCCESS), "channel close", true);
+    /* Closes both the socket and the connection */
+    parse_amqp_response(amqp_connection_close(tube->connection, AMQP_REPLY_SUCCESS), "connection close", true);
 
-    status = amqp_destroy_connection(conn);
+    status = amqp_destroy_connection(tube->connection);
+
+    destroy_hoover_tube(tube);
 
     return 0;
 }
-
-
