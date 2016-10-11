@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 
+import StringIO
+import json
+
 # Need to mask out unknown threads because the DVS IPC stats file contains
 # random garbage after each Instance block
 _VALID_INSTANCE_KEYS = [
@@ -78,6 +81,34 @@ def parse_dvs_mount_stats( fp ):
 
     return data
 
+
+def parse_concatenated_dvs_ipc_stats( fp ):
+    """
+    Read in a file containing concatenated DVS IPC stats and split it into an
+    array of counters.  Right now only consider IPC counters; discard the others
+    """
+    counter_pages = []
+    page_txt = None
+    for line in fp:
+        if line.startswith('DVS IPC Transport Statistics'):
+            if page_txt is None:
+                page_txt = StringIO.StringIO()
+            else:
+                page_txt.flush()
+                page_txt.seek(0, 0)
+                values = parse_dvs_ipc_stats(page_txt)
+                counter_pages.append(values['ipc_counters'])
+                page_txt.close()
+                page_txt = StringIO.StringIO()
+        page_txt.write(line)
+    ### flush last page
+    page_txt.flush()
+    page_txt.seek(0, 0)
+    values = parse_dvs_ipc_stats(page_txt)
+    counter_pages.append(values['ipc_counters'])
+
+    return counter_pages
+
 def parse_dvs_ipc_stats( fp ):
     # num  logical state
     # 1    parsing dvs stats file, looking for "DVS IPC Transport" header
@@ -103,15 +134,16 @@ def parse_dvs_ipc_stats( fp ):
                 state += 1
             else:
                 k, v = line.strip().rsplit(None, 1)
-                data['ipc_counters'][k] = int(v.strip())
+                data['ipc_counters'][k] = [ int(v.strip(), 16) ]
         elif state == 3:
-            if line.startswith('Instance'):
+            if line.startswith('Instance') or line.strip() == "":
                 state += 1
-                this_instance = line.rsplit(None, 1)[-1].strip(': \n')
+                if line.strip() != "":
+                    this_instance = line.rsplit(None, 1)[-1].strip(': \n')
                 data['ipc_instances'] = {}
                 data['ipc_instances'][this_instance] = {}
             else:
-                data['ipc_refill_stats'] += [ int(x) for x in line.strip().split() ]
+                data['ipc_refill_stats'] += [ int(x,16) for x in line.strip().split() ]
         elif state == 4:
             if line.startswith("Size Distributions"):
                 state += 1
@@ -126,7 +158,10 @@ def parse_dvs_ipc_stats( fp ):
                     pass
                 else:
                     if k in _VALID_INSTANCE_KEYS:
-                        data['ipc_instances'][this_instance][k] = int(v.strip())
+                        data['ipc_instances'][this_instance][k] = int(v.strip(),16)
+    if len(data.keys()) == 0:
+        raise Exception("parsed null page")
+
     return data
 
 if __name__ == '__main__':

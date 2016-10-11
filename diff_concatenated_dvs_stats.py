@@ -30,6 +30,8 @@ def diff_single_stats_file( fp, fstype ):
 
     if fstype == "dvs":
         page_list = procfs.dvs.parse_concatenated_dvs_mount_stats(fp)
+    elif fstype == "dvs_ipc":
+        page_list = procfs.dvs.parse_concatenated_dvs_ipc_stats(fp)
     elif fstype == "llite":
         page_list = procfs.llite.parse_concatenated_llite_stats(fp)
     counter_diffs = []
@@ -120,6 +122,8 @@ if __name__ == '__main__':
     ### assume we're parsing dvs counters by default
     if "lustre" in sys.argv[0]:
         fstype="llite"
+    elif "ipc" in sys.argv[0]:
+        fstype="dvs_ipc"
     else:
         fstype="dvs"
 
