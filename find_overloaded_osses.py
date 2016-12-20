@@ -5,10 +5,14 @@
 #  variation.
 #
 
+import os
 import subprocess
 import socket # for sorting IP addresses
 
-_LCTL = '/usr/sbin/lctl'
+for lctl in '/usr/sbin/lctl', '/sbin/lctl':
+    if os.path.isfile( lctl ):
+        _LCTL = lctl
+        break
 
 p = subprocess.Popen( [ _LCTL, 'dl', '-t' ], stdout=subprocess.PIPE )
 
